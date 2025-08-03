@@ -11,6 +11,7 @@ dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
     "azure-storage-blob~=12.26.0",
     "azure-identity~=1.23.1",
+    "python-magic~=0.4.27",
 ]
 
 [build-system]

@@ -1,8 +1,9 @@
 import os
 
 import frappe
+import magic
 from azure.core.exceptions import AzureError, ResourceExistsError
-from azure.storage.blob import BlobServiceClient, PublicAccess
+from azure.storage.blob import BlobServiceClient, ContentSettings
 from frappe import _
 from frappe.utils.file_manager import get_file_path
 
@@ -138,10 +139,18 @@ class BlobStore:
                 ),
                 blob=file_name,
             )
-            with open(get_file_path(file_name), "rb") as data:
-                blob_client.upload_blob(data, overwrite=True)
+            full_file_path = get_file_path(file_name)
+            with open(full_file_path, "rb") as data:
+                blob_client.upload_blob(
+                    data,
+                    overwrite=True,
+                    content_settings=ContentSettings(
+                        content_type=magic.from_file(full_file_path, mime=True),
+                        content_disposition=f"inline; filename={file_name}",
+                    ),
+                )
             if remove_original:
-                os.remove(get_file_path(file_name))
+                os.remove(full_file_path)
             frappe.db.set_value("File", {"file_name": file_name}, "file_url", blob_client.url)
             frappe.db.commit()
 
