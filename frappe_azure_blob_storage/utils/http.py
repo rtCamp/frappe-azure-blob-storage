@@ -90,13 +90,16 @@ def http_request(
     data=None,
     json=None,
     params=None,
-    log_always=frappe.conf.developer_mode,
+    log_always=None,
     id=None,
 ):
     auth = auth or ""
     data = data or {}
     headers = headers or {}
     response = None
+
+    if log_always is None:
+        log_always = frappe.conf.developer_mode
 
     try:
         s = get_request_session()

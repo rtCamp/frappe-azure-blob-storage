@@ -1,6 +1,8 @@
+import os
+
 import frappe
 from azure.core.exceptions import AzureError, ResourceExistsError
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, PublicAccess
 from frappe import _
 from frappe.utils.file_manager import get_file_path
 
@@ -22,6 +24,47 @@ class BlobStore:
         """
         self.settings = frappe.get_single("Azure Storage Settings")
         self.blob_service_client = blob_service_client or self._get_blob_service_client()
+
+        # Ensure appropriate containers
+        self._ensure_container_exists(self.get_public_container_name(), public=True)
+        self._ensure_container_exists(self.get_private_container_name(), public=False)
+
+    def get_public_container_name(self) -> str:
+        """
+        Returns the name of the public container.
+        """
+        return f"{self.settings.default_container_name}-public"
+
+    def get_private_container_name(self) -> str:
+        """
+        Returns the name of the private container.
+        """
+        return f"{self.settings.default_container_name}-private"
+
+    def _ensure_container_exists(self, container_name: str, public: bool = False):
+        """
+        Create a container if it doesn't exist.
+        Set public access if requested.
+        """
+        try:
+            container_client = self.blob_service_client.get_container_client(container_name)
+
+            try:
+                container_client.create_container()
+            except ResourceExistsError:
+                # This is expected if the container is already there.
+                pass
+
+            if public:
+                container_client.set_container_access_policy(signed_identifiers={}, public_access="blob")
+
+        except Exception as e:
+            generate_error_log(
+                _("Azure Container Error"),
+                _("Failed to initialize container '{0}'.").format(container_name),
+                exception=e,
+                throw_exc=True,
+            )
 
     def _get_blob_service_client(self) -> BlobServiceClient:
         """
@@ -76,12 +119,9 @@ class BlobStore:
                 throw_exc=True,
             )
 
-    def upload_existing_file(self, file_name: str) -> None:
+    def upload_local_file(self, file_name: str, private: bool = True, remove_original: bool = False) -> None:
         """
         Uploads an existing file to Azure Blob Storage.
-
-        :param file_name: The name of the file to upload.
-        :param file_url: The URL of the file to upload.
         """
         try:
             file_url = frappe.db.get_value("File", {"file_name": file_name}, "file_url")
@@ -92,18 +132,18 @@ class BlobStore:
                     throw_exc=True,
                 )
 
-            # Ensure container exists (no-op if already exists)
-            try:
-                self.blob_service_client.create_container(self.settings.default_container_name)
-            except ResourceExistsError:
-                pass
-
             blob_client = self.blob_service_client.get_blob_client(
-                container=self.settings.default_container_name, blob=file_name
+                container=(
+                    self.get_public_container_name() if not private else self.get_private_container_name()
+                ),
+                blob=file_name,
             )
             with open(get_file_path(file_name), "rb") as data:
                 blob_client.upload_blob(data, overwrite=True)
-            frappe.db.set_value("File", file_name, "file_url", blob_client.url)
+            if remove_original:
+                os.remove(get_file_path(file_name))
+            frappe.db.set_value("File", {"file_name": file_name}, "file_url", blob_client.url)
+            frappe.db.commit()
 
         except AzureError as e:
             generate_error_log(
@@ -112,3 +152,7 @@ class BlobStore:
                 exception=e,
                 throw_exc=True,
             )
+
+    @classmethod
+    def is_local_file(cls, file_url: str) -> bool:
+        return file_url and not file_url.startswith("http")
