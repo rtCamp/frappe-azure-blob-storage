@@ -1,9 +1,16 @@
 import os
+from datetime import timedelta
+from urllib.parse import quote
 
 import frappe
 import magic
 from azure.core.exceptions import AzureError, ResourceExistsError
-from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.storage.blob import (
+    BlobSasPermissions,
+    BlobServiceClient,
+    ContentSettings,
+    generate_blob_sas,
+)
 from frappe import _
 from frappe.utils.file_manager import get_file_path
 
@@ -66,6 +73,35 @@ class BlobStore:
                 exception=e,
                 throw_exc=True,
             )
+
+    def generate_sas_url(
+        self,
+        blob_name: str,
+        container_name: str | None = None,
+    ) -> str:
+        """
+        Generates a temporary SAS URL to allow read access to a private blob.
+
+        :param container_name: The name of the private container.
+        :param blob_name: The name of the blob.
+        :return: A full URL with a SAS token for temporary access.
+        """
+        if container_name is None:
+            container_name = self.get_private_container_name()
+
+        blob_client = self.blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+
+        # Generate a SAS token that's valid for 15 minutes
+        sas_token = generate_blob_sas(
+            account_name=blob_client.account_name,
+            container_name=container_name,
+            blob_name=blob_name,
+            account_key=self.blob_service_client.credential.account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=frappe.utils.now_datetime() + timedelta(minutes=15),
+        )
+
+        return f"{blob_client.url}?{sas_token}"
 
     def _get_blob_service_client(self) -> BlobServiceClient:
         """
@@ -151,7 +187,16 @@ class BlobStore:
                 )
             if remove_original:
                 os.remove(full_file_path)
-            frappe.db.set_value("File", {"file_name": file_name}, "file_url", blob_client.url)
+            frappe.db.set_value(
+                "File",
+                {"file_name": file_name},
+                "file_url",
+                (
+                    blob_client.url
+                    if not private
+                    else f"/api/method/frappe_azure_blob_storage.api.blob_apis.download_private_file?file_name={quote(file_name)}"
+                ),
+            )
             frappe.db.commit()
 
         except AzureError as e:
@@ -164,4 +209,4 @@ class BlobStore:
 
     @classmethod
     def is_local_file(cls, file_url: str) -> bool:
-        return file_url and not file_url.startswith("http")
+        return file_url and (not file_url.startswith("http") and not file_url.startswith("/api/method"))

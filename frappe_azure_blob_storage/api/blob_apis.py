@@ -85,3 +85,47 @@ def _run_migrate_job():
             _("Failed to migrate files to Azure Blob Storage"),
             realtime=True,
         )
+
+
+@frappe.whitelist()
+def download_private_file(file_name: str):
+    """
+    A proxy method to securely download private files from Azure.
+    It checks file permissions and then redirects to a temporary SAS URL.
+    """
+    try:
+        # 1. Get the File document
+        file_doc = frappe.get_doc("File", {"file_name": file_name})
+
+        # 2. Check permissions
+        if not file_doc.is_private:
+            # If for some reason a public file URL points here, just redirect
+            frappe.local.response["type"] = "redirect"
+            frappe.local.response["location"] = file_doc.file_url
+            return
+
+        # This is Frappe's standard permission check for files
+        if not frappe.has_permission("File", "read", file_doc):
+            raise frappe.PermissionError
+
+        # 3. Ensure the file is actually in Azure
+        if BlobStore.is_local_file(file_doc.file_url):
+            raise frappe.ValidationError(_("This file is not stored on Azure."))
+
+        # 4. Generate the SAS URL
+        blob_store = BlobStore()
+        blob_name = file_name
+        sas_url = blob_store.generate_sas_url(
+            blob_name=blob_name,
+            container_name=blob_store.get_private_container_name(),
+        )
+
+        # 5. Redirect the user to the temporary URL
+        frappe.local.response["type"] = "redirect"
+        frappe.local.response["location"] = sas_url
+
+    except frappe.DoesNotExistError:
+        frappe.throw(_("File not found."), frappe.NotFound)
+    except Exception as e:
+        frappe.log_error(title="Private File Download", message=frappe.get_traceback())
+        frappe.throw(_("Could not retrieve file. Error: {0}").format(str(e)))
