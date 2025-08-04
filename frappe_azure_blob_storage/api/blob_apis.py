@@ -15,7 +15,7 @@ def test_connection():
     try:
         settings = frappe.get_single("Azure Storage Settings")
         if not settings:
-            return {"status": "error", "message": "Azure Storage Settings not found."}
+            return http_response("Azure Storage Settings not found.")
 
         blob_store = BlobStore()
         blob_store.blob_service_client.get_service_properties()  # This will raise an error if connection fails
@@ -62,14 +62,27 @@ def _run_migrate_job():
     try:
         blob_store = BlobStore()
         files_list = frappe.get_all("File", fields=["file_name", "file_url", "is_private"])
-        for file in files_list:
+        for index, file in enumerate(files_list):
             if blob_store.is_local_file(file["file_url"]):
                 blob_store.upload_local_file(
                     file["file_name"],
                     remove_original=True,
                     private=file.get("is_private", True),
                 )
+            # Update progress
+            progress = int((index + 1) / len(files_list) * 100)
+            frappe.publish_progress(
+                progress,
+                title=_("Azure File Migration"),
+                description=_("Migrating files to Azure Blob Storage..."),
+            )
 
+        # Final progress update to signify completion
+        frappe.publish_progress(
+            100,
+            title=_("Azure File Migration"),
+            description=_("Migration completed successfully!"),
+        )
         frappe.msgprint(
             _("File migration to Azure Blob Storage completed successfully."),
             realtime=True,
@@ -115,6 +128,7 @@ def download_private_file(file_name: str):
         # 4. Generate the SAS URL
         blob_store = BlobStore()
         blob_name = file_name
+        # TODO: Cache the link until it expires
         sas_url = blob_store.generate_sas_url(
             blob_name=blob_name,
             container_name=blob_store.get_private_container_name(),

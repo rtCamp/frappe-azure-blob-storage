@@ -13,7 +13,8 @@
   "default_container_name",
   "credentials_section",
   "connection_string",
-  "access_key"
+  "access_key",
+  "check_connection"
  ],
  "fields": [
   {
@@ -73,13 +74,19 @@
    "fieldtype": "Data",
    "label": "Default Container Name",
    "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.connection_string || (doc.access_key && doc.account_name)",
+   "fieldname": "check_connection",
+   "fieldtype": "Button",
+   "label": "Check Connection"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-08-01 01:23:59.107318",
+ "modified": "2025-08-04 22:10:43.588563",
  "modified_by": "Administrator",
  "module": "Frappe Azure Blob Storage",
  "name": "Azure Storage Settings",

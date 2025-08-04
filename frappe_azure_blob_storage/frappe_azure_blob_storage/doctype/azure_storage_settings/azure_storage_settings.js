@@ -4,24 +4,13 @@
 frappe.ui.form.on("Azure Storage Settings", {
 	refresh: function (frm) {
 		if (!frm.is_new()) {
-			frm.add_custom_button(
-				__("Test Connection"),
-				() => {
-					frm.events.test_connection(frm);
-				},
-				__("Azure Actions")
-			);
-			frm.add_custom_button(
-				__("Migrate Files"),
-				() => {
-					frm.events.migrate_files(frm);
-				},
-				__("Azure Actions")
-			);
+			frm.add_custom_button(__("Migrate Files"), () => {
+				frm.events.migrate_files(frm);
+			});
 		}
 	},
 
-	test_connection: function (_) {
+	check_connection: function (_) {
 		frappe.call({
 			method: "frappe_azure_blob_storage.api.blob_apis.test_connection",
 			callback: function (r) {
