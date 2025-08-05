@@ -61,13 +61,12 @@ def _run_migrate_job():
     """
     try:
         blob_store = BlobStore()
-        files_list = frappe.get_all("File", fields=["file_name", "file_url", "is_private"])
+        files_list = frappe.get_all("File", fields=["file_name", "file_url"])
         for index, file in enumerate(files_list):
             if blob_store.is_local_file(file["file_url"]):
                 blob_store.upload_local_file(
                     file["file_name"],
                     remove_original=True,
-                    private=file.get("is_private", True),
                 )
             # Update progress
             progress = int((index + 1) / len(files_list) * 100)
@@ -108,7 +107,8 @@ def download_private_file(file_name: str):
     """
     try:
         # 1. Get the File document
-        file_doc = frappe.get_doc("File", {"file_name": file_name})
+        file_url = BlobStore.get_private_file_link(file_name)
+        file_doc = frappe.get_doc("File", {"file_url": file_url})
 
         # 2. Check permissions
         if not file_doc.is_private:
@@ -128,7 +128,6 @@ def download_private_file(file_name: str):
         # 4. Generate the SAS URL
         blob_store = BlobStore()
         blob_name = file_name
-        # TODO: Cache the link until it expires
         sas_url = blob_store.generate_sas_url(
             blob_name=blob_name,
             container_name=blob_store.get_private_container_name(),

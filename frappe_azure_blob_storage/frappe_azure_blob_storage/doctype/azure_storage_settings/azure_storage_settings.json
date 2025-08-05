@@ -8,13 +8,16 @@
   "authentication_section",
   "authentication_method",
   "storage_account_name",
+  "remove_original_files",
   "column_break_gngc",
   "endpoint_suffix",
   "default_container_name",
   "credentials_section",
   "connection_string",
   "access_key",
-  "check_connection"
+  "check_connection",
+  "column_break_rvlc",
+  "sas_token_validity"
  ],
  "fields": [
   {
@@ -61,8 +64,8 @@
    "fieldtype": "Column Break"
   },
   {
-   "default": "core.windows.net",
-   "description": "Usually `core.windows.net`, but can be different for national/regional clouds.",
+   "default": "blob.core.windows.net",
+   "description": "Usually `blob.core.windows.net`, but can be different for national/regional clouds.",
    "fieldname": "endpoint_suffix",
    "fieldtype": "Data",
    "label": "Endpoint Suffix",
@@ -80,13 +83,34 @@
    "fieldname": "check_connection",
    "fieldtype": "Button",
    "label": "Check Connection"
+  },
+  {
+   "fieldname": "column_break_rvlc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "900",
+   "description": "Time for which the SAS generated for private files is valid (in seconds)",
+   "documentation_url": "https://learn.microsoft.com/en-us/azure/storage/common/storage-sas-overview",
+   "fieldname": "sas_token_validity",
+   "fieldtype": "Int",
+   "label": "SAS token validity",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Delete the files from the Frappe's local storage",
+   "fieldname": "remove_original_files",
+   "fieldtype": "Check",
+   "label": "Remove Original Files"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-08-04 22:10:43.588563",
+ "modified": "2025-08-05 19:50:20.764160",
  "modified_by": "Administrator",
  "module": "Frappe Azure Blob Storage",
  "name": "Azure Storage Settings",
