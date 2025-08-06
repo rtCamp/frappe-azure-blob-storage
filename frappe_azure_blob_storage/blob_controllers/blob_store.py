@@ -222,12 +222,13 @@ class BlobStore:
             + final_key
         )
 
-    def upload_local_file(self, file_name: str, remove_original: bool | None = None) -> None:
+    def upload_local_file(self, file_id: str, remove_original: bool | None = None) -> None:
         """
         Uploads an existing file to Azure Blob Storage.
         """
         try:
-            file_doc = frappe.get_doc("File", {"file_name": file_name})
+            file_doc = frappe.get_doc("File", file_id)
+            file_name = file_doc.file_name
             parent_doctype = file_doc.attached_to_doctype or "File"
             parent_name = file_doc.attached_to_name
             is_private = file_doc.is_private
@@ -236,7 +237,7 @@ class BlobStore:
             if not file_url:
                 generate_error_log(
                     _("File Not Found"),
-                    _("The specified file does not exist in the system."),
+                    _("File {}:{} does not exist in the system.").format(file_id, file_url),
                     throw_exc=True,
                 )
 
@@ -253,7 +254,7 @@ class BlobStore:
 
             frappe.db.set_value(
                 "File",
-                {"file_name": file_name},
+                file_id,
                 "file_url",
                 blob_url,
             )

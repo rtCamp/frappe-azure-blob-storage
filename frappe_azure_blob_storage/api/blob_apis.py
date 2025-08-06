@@ -61,21 +61,28 @@ def _run_migrate_job():
     """
     try:
         blob_store = BlobStore()
-        files_list = frappe.get_all("File", fields=["file_name", "file_url"])
+        files_list = frappe.get_all(
+            "File",
+            fields=["name", "file_url", "file_name"],
+            filters=[
+                ["file_url", "is", "set"],
+                ["file_url", "not like", "http%"],
+                ["file_url", "not like", "/api/method%"],
+            ],
+        )
+        total_files = len(files_list)
         for index, file in enumerate(files_list):
-            if blob_store.is_local_file(file["file_url"]):
-                blob_store.upload_local_file(
-                    file["file_name"],
-                    remove_original=True,
-                )
+            blob_store.upload_local_file(file["name"])
+            current_file_number = index + 1
             # Update progress
-            progress = int((index + 1) / len(files_list) * 100)
+            progress = current_file_number / total_files * 100
             frappe.publish_progress(
                 progress,
                 title=_("Azure File Migration"),
-                description=_("Migrating files to Azure Blob Storage..."),
+                description=_("Migrating file {}/{}: {}").format(
+                    current_file_number, total_files, file["file_name"]
+                ),
             )
-
         # Final progress update to signify completion
         frappe.publish_progress(
             100,
