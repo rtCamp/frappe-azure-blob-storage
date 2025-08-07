@@ -42,6 +42,7 @@ def migrate_files():
             queue="long",
             job_name="Migrate Files to Azure Blob Storage",
             timeout=600,
+            is_web_request=True,
         )
 
         return http_response(_("File migration to Azure Blob Storage has been queued successfully."))
@@ -53,12 +54,13 @@ def migrate_files():
         )
 
 
-def _run_migrate_job():
+def _run_migrate_job(is_web_request: bool = True):
     """
     Migrate files from local storage to Azure Blob Storage.
     This function assumes that the files are stored in a specific directory
     and uploads them to the configured Azure Blob Storage container.
     """
+
     try:
         blob_store = BlobStore()
         files_list = frappe.get_all(
@@ -71,28 +73,63 @@ def _run_migrate_job():
             ],
         )
         total_files = len(files_list)
+        if not total_files:
+            if is_web_request:
+                frappe.publish_progress(
+                    100,
+                    title=_("Azure File Migration"),
+                    description=_("No new local files to migrate."),
+                )
+            else:
+                print("No new local files to migrate.")
+            return
+
         for index, file in enumerate(files_list):
-            blob_store.upload_local_file(file["name"])
+            file_id = file["name"]
+            file_name = file["file_name"]
+            try:
+                blob_store.upload_local_file(file_id)
+            except FileNotFoundError:
+                generate_error_log(
+                    "File Migration Error",
+                    f"File not found on local disk: {file_id}:{file_name}. Skipping.",
+                )
+                if is_web_request:
+                    frappe.publish_progress(
+                        100,
+                        title=_("Azure File Migration"),
+                        description=_("File not found: {0}. Skipping.").format(file_name),
+                    )
+                else:
+                    print(
+                        f"File not found on local disk: {file_id}:{file_name}. Skipping.",
+                    )
+                continue
             current_file_number = index + 1
             # Update progress
             progress = current_file_number / total_files * 100
-            frappe.publish_progress(
-                progress,
-                title=_("Azure File Migration"),
-                description=_("Migrating file {}/{}: {}").format(
-                    current_file_number, total_files, file["file_name"]
-                ),
-            )
+            description = _("Migrating {0}/{1}: {2}").format(current_file_number, total_files, file_name)
+            if is_web_request:
+                frappe.publish_progress(
+                    progress,
+                    title=_("Azure File Migration"),
+                    description=description,
+                )
+            else:
+                print(description)
         # Final progress update to signify completion
-        frappe.publish_progress(
-            100,
-            title=_("Azure File Migration"),
-            description=_("Migration completed successfully!"),
-        )
-        frappe.msgprint(
-            _("File migration to Azure Blob Storage completed successfully."),
-            realtime=True,
-        )
+        if is_web_request:
+            frappe.publish_progress(
+                100,
+                title=_("Azure File Migration"),
+                description=_("Migration completed successfully!"),
+            )
+            frappe.msgprint(
+                _("File migration to Azure Blob Storage completed successfully."),
+                realtime=True,
+            )
+        else:
+            print("Migration completed successfully!")
 
     except Exception as e:
         generate_error_log(
@@ -100,10 +137,13 @@ def _run_migrate_job():
             frappe.get_traceback(),
             exception=e,
         )
-        return frappe.msgprint(
-            _("Failed to migrate files to Azure Blob Storage"),
-            realtime=True,
-        )
+        if is_web_request:
+            frappe.msgprint(
+                _("Failed to migrate files to Azure Blob Storage"),
+                realtime=True,
+            )
+        else:
+            print(f"\nERROR: Migration failed. Check Error Log for details.\n{frappe.get_traceback()}")
 
 
 @frappe.whitelist()

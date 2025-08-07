@@ -242,7 +242,7 @@ class BlobStore:
                 )
 
             file_blob_key = self.blob_key_generator(file_name, parent_doctype, parent_name, is_private)
-            full_file_path = get_file_path(file_name)
+            full_file_path = get_file_path(file_id)
 
             blob_url = self.upload_blob(
                 file_key=file_blob_key,
