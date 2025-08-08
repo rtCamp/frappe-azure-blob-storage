@@ -130,20 +130,20 @@ app_license = "agpl-3.0"
 # Override standard doctype classes
 
 # override_doctype_class = {
-# 	"ToDo": "custom_app.overrides.CustomToDo"
+#     "File": "frappe_azure_blob_storage.doc_events.file_events.OverrideFile",
 # }
 
 # Document Events
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "File": {
+        "after_insert": "frappe_azure_blob_storage.doc_events.file_events.after_insert",
+        "on_update": "frappe_azure_blob_storage.doc_events.file_events.on_update",
+        "on_trash": "frappe_azure_blob_storage.doc_events.file_events.on_trash",
+    }
+}
 
 # Scheduled Tasks
 # ---------------

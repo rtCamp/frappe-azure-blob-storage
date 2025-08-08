@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import timedelta
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 import frappe
 import magic
@@ -298,13 +298,151 @@ class BlobStore:
                 throw_exc=True,
             )
 
+    def move_blob(
+        self,
+        source_blob_key: str,
+        destination_blob_key: str,
+        to_private: bool = True,
+    ) -> None:
+        """
+        Moves a blob from one location to another within Azure Blob Storage.
+        """
+        try:
+            private_container = self.get_private_container_name()
+            public_container = self.get_public_container_name()
+
+            if to_private:
+                src_container, dest_container = public_container, private_container
+            else:
+                src_container, dest_container = private_container, public_container
+
+            source_client = self.blob_service_client.get_blob_client(
+                container=src_container, blob=source_blob_key
+            )
+
+            if not source_client.exists():
+                generate_error_log(
+                    "Blob Move Error",
+                    f"Source blob {source_blob_key} not found in container {src_container} during move.",
+                )
+                frappe.throw(
+                    _("Source blob {0} not found in container {1}.").format(source_blob_key, src_container),
+                    frappe.DoesNotExistError,
+                )
+                return
+
+            destination_client = self.blob_service_client.get_blob_client(
+                container=dest_container, blob=destination_blob_key
+            )
+
+            destination_client.start_copy_from_url(source_client.url)
+
+            # TODO: Poll for copy completion. For large files, this might need to be a background job.
+            # copy_props = dest_client.get_blob_properties().copy
+            # while copy_props.status == 'pending':
+            #     time.sleep(1)
+            #     copy_props = dest_client.get_blob_properties().copy
+            #
+            # if copy_props.status != 'success':
+            #     raise Exception(f"Server-side copy failed with status: {copy_props.status}")
+
+            # Delete the original blob
+            # source_client.delete_blob()
+
+            # Remove the cached SAS URL for the source blob
+            frappe.cache().delete_value(f"azure_blob_sas_url::{src_container}::{source_blob_key}")
+            return (
+                destination_client.url if not to_private else self.get_private_file_link(destination_blob_key)
+            )
+        except AzureError as e:
+            generate_error_log(
+                _("Azure Blob Move Error"),
+                _("Failed to move blob in Azure Blob Storage."),
+                exception=e,
+                throw_exc=True,
+            )
+
+    def delete_blob(self, container_name: str, blob_name: str):
+        """
+        Deletes a specific blob from a given container in Azure.
+
+        :param container_name: The name of the container holding the blob.
+        :param blob_name: The name of the blob to delete.
+        """
+        try:
+            blob_client = self.blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+            # delete_blob() will not raise an error if the blob doesn't exist.
+            blob_client.delete_blob()
+        except Exception as e:
+            # Log the error but don't prevent the Frappe document from being deleted.
+            generate_error_log(
+                "Azure Blob Deletion Error",
+                f"Failed to delete blob '{blob_name}' from container '{container_name}'.",
+                exception=e,
+            )
+            raise e
+
     @classmethod
     def get_private_file_link(cls, file_key: str) -> str:
         """
         Returns a temporary link to a private file stored in Azure Blob Storage.
         """
-        return f"/api/method/frappe_azure_blob_storage.api.blob_apis.download_private_file?file_name={quote(file_key)}"
+        # NOTE: It is better to provide the entire URL to the API method since Frappe internally
+        # checks if the URL starts with `http` and handles operations accordingly.
+        return f"{frappe.utils.get_url()}/api/method/frappe_azure_blob_storage.api.blob_apis.download_private_file?file_name={quote(file_key)}"
 
     @classmethod
     def is_local_file(cls, file_url: str) -> bool:
         return file_url and (not file_url.startswith("http") and not file_url.startswith("/api/method"))
+
+    def parse_url(self, file_url: str) -> frappe._dict | None:
+        """
+        Parses a Frappe/Azure file URL to extract its components.
+
+        Args:
+            file_url: The URL of the file, which can be a private proxy URL
+                    or a direct public Azure Blob Storage URL.
+
+        Returns:
+            A dict containing (container_name, blob_name, is_private).
+            Returns None if the URL format is not recognized.
+        """
+        if not file_url:
+            return None
+
+        parsed_url = urlparse(file_url)
+
+        # --- Handle Private Proxy URLs ---
+        # e.g., /api/method/...?file_name=container/path/to/blob.pdf
+        if "/api/method/" in parsed_url.path:
+            query_params = parse_qs(parsed_url.query)
+            blob_full_path = query_params.get("file_name", [None])[0]
+
+            if blob_full_path:
+                # The format is container_name/blob_name
+                parts = blob_full_path.split("/", 1)
+                if len(parts) == 2:
+                    container_name, blob_name = parts
+                    return frappe._dict(
+                        container_name=container_name,
+                        blob_name=container_name + "/" + blob_name,
+                        is_private=True,
+                    )
+
+        # --- Handle Public Direct Azure URLs ---
+        # e.g., https://account.blob.core.windows.net/container/path/to/blob.pdf
+        elif self.settings.endpoint_suffix in parsed_url.netloc:
+            # Path will be like /container_name/path/to/blob.pdf
+            path_parts = parsed_url.path.strip("/").split("/")
+            if path_parts:
+                container_name = path_parts[0]
+                # The rest of the path is the blob name
+                blob_name = "/".join(path_parts[1:])
+                return frappe._dict(
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    is_private=False,
+                )
+
+        # If neither format matches
+        return None
