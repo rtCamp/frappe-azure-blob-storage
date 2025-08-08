@@ -23,6 +23,21 @@ def on_update(doc, method):
     if not doc.has_value_changed("is_private") or BlobStore.is_local_file(doc.file_url):
         return
 
+    blob_store = BlobStore()
+    blob_details = blob_store.parse_url(doc.file_url)
+    if not blob_details:
+        generate_error_log(
+            "File URL parsing failed",
+            f"Failed to parse file URL: {doc.file_url}",
+            exception=frappe.get_traceback(),
+        )
+        raise frappe.ValidationError(f"Cannot update file {doc.file_url}: Invalid file URL.")
+    blob_store.move_blob(
+        source_blob_key=blob_details.blob_name,
+        destination_blob_key=blob_details.blob_name,
+        to_private=doc.is_private,
+    )
+
 
 def on_trash(doc, method):
     """

@@ -216,11 +216,7 @@ class BlobStore:
         ]
 
         final_key = "/".join(part for part in path_parts if part)
-        return (
-            (self.get_private_container_name() if is_private else self.get_public_container_name())
-            + "/"
-            + final_key
-        )
+        return final_key
 
     def upload_local_file(self, file_id: str, remove_original: bool | None = None) -> None:
         """
@@ -416,18 +412,14 @@ class BlobStore:
         # e.g., /api/method/...?file_name=container/path/to/blob.pdf
         if "/api/method/" in parsed_url.path:
             query_params = parse_qs(parsed_url.query)
-            blob_full_path = query_params.get("file_name", [None])[0]
+            blob_name = query_params.get("file_name", [None])[0]
 
-            if blob_full_path:
-                # The format is container_name/blob_name
-                parts = blob_full_path.split("/", 1)
-                if len(parts) == 2:
-                    container_name, blob_name = parts
-                    return frappe._dict(
-                        container_name=container_name,
-                        blob_name=container_name + "/" + blob_name,
-                        is_private=True,
-                    )
+            if blob_name:
+                return frappe._dict(
+                    container_name=self.get_private_container_name(),
+                    blob_name=blob_name,
+                    is_private=True,
+                )
 
         # --- Handle Public Direct Azure URLs ---
         # e.g., https://account.blob.core.windows.net/container/path/to/blob.pdf
