@@ -1,6 +1,9 @@
 import frappe
 
-from frappe_azure_blob_storage.blob_controllers.blob_store import BlobStore
+from frappe_azure_blob_storage.blob_controllers.blob_store import (
+    BlobStore,
+    change_file_privacy,
+)
 from frappe_azure_blob_storage.utils.error import generate_error_log
 
 
@@ -32,10 +35,20 @@ def on_update(doc, method):
             exception=frappe.get_traceback(),
         )
         raise frappe.ValidationError(f"Cannot update file {doc.file_url}: Invalid file URL.")
-    blob_store.move_blob(
-        source_blob_key=blob_details.blob_name,
-        destination_blob_key=blob_details.blob_name,
+
+    prev_url = doc.file_url
+    # Generate a placeholder URL for the file while it is being moved
+    frappe.db.set_value("File", doc.name, "file_url", blob_store.get_private_file_link("in-transit"))
+
+    frappe.enqueue(
+        change_file_privacy,
+        queue="long",
+        job_id=f"moving_blob_{doc.name}",
+        deduplicate=True,
+        file_id=doc.name,
         to_private=doc.is_private,
+        prev_url=prev_url,
+        enqueue_after_commit=True,
     )
 
 

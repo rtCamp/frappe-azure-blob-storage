@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from datetime import timedelta
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -294,70 +295,6 @@ class BlobStore:
                 throw_exc=True,
             )
 
-    def move_blob(
-        self,
-        source_blob_key: str,
-        destination_blob_key: str,
-        to_private: bool = True,
-    ) -> None:
-        """
-        Moves a blob from one location to another within Azure Blob Storage.
-        """
-        try:
-            private_container = self.get_private_container_name()
-            public_container = self.get_public_container_name()
-
-            if to_private:
-                src_container, dest_container = public_container, private_container
-            else:
-                src_container, dest_container = private_container, public_container
-
-            source_client = self.blob_service_client.get_blob_client(
-                container=src_container, blob=source_blob_key
-            )
-
-            if not source_client.exists():
-                generate_error_log(
-                    "Blob Move Error",
-                    f"Source blob {source_blob_key} not found in container {src_container} during move.",
-                )
-                frappe.throw(
-                    _("Source blob {0} not found in container {1}.").format(source_blob_key, src_container),
-                    frappe.DoesNotExistError,
-                )
-                return
-
-            destination_client = self.blob_service_client.get_blob_client(
-                container=dest_container, blob=destination_blob_key
-            )
-
-            destination_client.start_copy_from_url(source_client.url)
-
-            # TODO: Poll for copy completion. For large files, this might need to be a background job.
-            # copy_props = dest_client.get_blob_properties().copy
-            # while copy_props.status == 'pending':
-            #     time.sleep(1)
-            #     copy_props = dest_client.get_blob_properties().copy
-            #
-            # if copy_props.status != 'success':
-            #     raise Exception(f"Server-side copy failed with status: {copy_props.status}")
-
-            # Delete the original blob
-            # source_client.delete_blob()
-
-            # Remove the cached SAS URL for the source blob
-            frappe.cache().delete_value(f"azure_blob_sas_url::{src_container}::{source_blob_key}")
-            return (
-                destination_client.url if not to_private else self.get_private_file_link(destination_blob_key)
-            )
-        except AzureError as e:
-            generate_error_log(
-                _("Azure Blob Move Error"),
-                _("Failed to move blob in Azure Blob Storage."),
-                exception=e,
-                throw_exc=True,
-            )
-
     def delete_blob(self, container_name: str, blob_name: str):
         """
         Deletes a specific blob from a given container in Azure.
@@ -370,7 +307,6 @@ class BlobStore:
             # delete_blob() will not raise an error if the blob doesn't exist.
             blob_client.delete_blob()
         except Exception as e:
-            # Log the error but don't prevent the Frappe document from being deleted.
             generate_error_log(
                 "Azure Blob Deletion Error",
                 f"Failed to delete blob '{blob_name}' from container '{container_name}'.",
@@ -438,3 +374,103 @@ class BlobStore:
 
         # If neither format matches
         return None
+
+
+def change_file_privacy(
+    file_id: str,
+    to_private: bool = True,
+    prev_url: str | None = None,
+) -> None:
+    """
+    Moves a blob from one location to another within Azure Blob Storage.
+    """
+    file_doc = frappe.get_doc("File", file_id)
+    try:
+        blob_store = BlobStore()
+        private_container = blob_store.get_private_container_name()
+        public_container = blob_store.get_public_container_name()
+
+        blob_details = blob_store.parse_url(prev_url)
+        if not blob_details:
+            generate_error_log(
+                "File URL parsing failed",
+                f"Failed to parse file URL: {prev_url}",
+                exception=frappe.get_traceback(),
+            )
+            raise frappe.ValidationError(f"Cannot change privacy for file {prev_url}: Invalid file URL.")
+
+        # keep the name same for both source and destination
+        source_blob_key = destination_blob_key = blob_details.blob_name
+
+        if to_private:
+            src_container, dest_container = public_container, private_container
+        else:
+            src_container, dest_container = private_container, public_container
+
+        source_client = blob_store.blob_service_client.get_blob_client(
+            container=src_container, blob=source_blob_key
+        )
+
+        if not source_client.exists():
+            generate_error_log(
+                "Blob Move Error",
+                f"Source blob {source_blob_key} not found in container {src_container} during move.",
+            )
+            frappe.throw(
+                _("Source blob {0} not found in container {1}.").format(source_blob_key, src_container),
+                frappe.DoesNotExistError,
+            )
+            return
+
+        destination_client = blob_store.blob_service_client.get_blob_client(
+            container=dest_container, blob=destination_blob_key
+        )
+
+        destination_client.start_copy_from_url(source_client.url)
+
+        # Poll for copy completion. For large files, this might need to be a background job.
+        copy_props = destination_client.get_blob_properties().copy
+        while copy_props.status == "pending":
+            time.sleep(1)
+            copy_props = destination_client.get_blob_properties().copy
+
+        if copy_props.status != "success":
+            generate_error_log(
+                "Blob Move Error",
+                f"Server-side copy failed for blob {source_blob_key} to {destination_blob_key} with status: {copy_props.status}",
+            )
+            raise Exception(_("Server-side copy failed with status: {}").format(copy_props.status))
+
+        # Delete the original blob
+        source_client.delete_blob()
+
+        # Remove the cached SAS URL for the source blob
+        frappe.cache().delete_value(f"azure_blob_sas_url::{src_container}::{source_blob_key}")
+        file_doc.set(
+            "file_url",
+            (
+                destination_client.url
+                if not to_private
+                else blob_store.get_private_file_link(destination_blob_key)
+            ),
+        )
+        file_doc.is_private = to_private
+        file_doc.save()
+    except Exception as e:
+        frappe.db.set_value(
+            "File",
+            file_id,
+            {
+                "file_url": prev_url,
+                "is_private": not to_private,
+            },
+        )
+        # Rollback the transaction to ensure the file URL is not updated
+        frappe.db.commit()
+
+        generate_error_log(
+            _("Azure Blob Move Error"),
+            _("Failed to move blob in Azure Blob Storage."),
+            exception=e,
+            throw_exc=True,
+        )
