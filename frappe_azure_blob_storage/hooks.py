@@ -130,7 +130,7 @@ app_license = "agpl-3.0"
 # Override standard doctype classes
 
 # override_doctype_class = {
-#     "File": "frappe_azure_blob_storage.doc_events.file_events.OverrideFile",
+#     "File": "frappe_azure_blob_storage.doc_events.file.OverrideFile",
 # }
 
 # Document Events
@@ -139,9 +139,9 @@ app_license = "agpl-3.0"
 
 doc_events = {
     "File": {
-        "after_insert": "frappe_azure_blob_storage.doc_events.file_events.after_insert",
-        "on_update": "frappe_azure_blob_storage.doc_events.file_events.on_update",
-        "on_trash": "frappe_azure_blob_storage.doc_events.file_events.on_trash",
+        "after_insert": "frappe_azure_blob_storage.doc_events.file.after_insert",
+        "on_update": "frappe_azure_blob_storage.doc_events.file.on_update",
+        "on_trash": "frappe_azure_blob_storage.doc_events.file.on_trash",
     }
 }
 

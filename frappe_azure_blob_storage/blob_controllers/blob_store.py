@@ -271,9 +271,7 @@ class BlobStore:
         """
         try:
             blob_client = self.blob_service_client.get_blob_client(
-                container=(
-                    self.get_public_container_name() if not is_private else self.get_private_container_name()
-                ),
+                container=(self.get_public_container_name() if not is_private else self.get_private_container_name()),
                 blob=file_key,
             )
             full_file_path = file_path
@@ -321,7 +319,7 @@ class BlobStore:
         """
         # NOTE: It is better to provide the entire URL to the API method since Frappe internally
         # checks if the URL starts with `http` and handles operations accordingly.
-        return f"{frappe.utils.get_url()}/api/method/frappe_azure_blob_storage.api.blob_apis.download_private_file?file_name={quote(file_key)}"
+        return f"{frappe.utils.get_url()}/api/method/frappe_azure_blob_storage.api.azure_blob.download_private_file?file_name={quote(file_key)}"
 
     @classmethod
     def is_local_file(cls, file_url: str) -> bool:
@@ -407,9 +405,7 @@ def change_file_privacy(
         else:
             src_container, dest_container = private_container, public_container
 
-        source_client = blob_store.blob_service_client.get_blob_client(
-            container=src_container, blob=source_blob_key
-        )
+        source_client = blob_store.blob_service_client.get_blob_client(container=src_container, blob=source_blob_key)
 
         if not source_client.exists():
             generate_error_log(
@@ -448,11 +444,7 @@ def change_file_privacy(
         frappe.cache().delete_value(f"azure_blob_sas_url::{src_container}::{source_blob_key}")
         file_doc.set(
             "file_url",
-            (
-                destination_client.url
-                if not to_private
-                else blob_store.get_private_file_link(destination_blob_key)
-            ),
+            (destination_client.url if not to_private else blob_store.get_private_file_link(destination_blob_key)),
         )
         file_doc.is_private = to_private
         file_doc.save()

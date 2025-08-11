@@ -40,8 +40,8 @@ def migrate_files():
         frappe.enqueue(
             _run_migrate_job,
             queue="long",
-            job_name="Migrate Files to Azure Blob Storage",
-            timeout=600,
+            job_id="migrate_files_to_azure",
+            deduplicate=True,
             is_web_request=True,
         )
 

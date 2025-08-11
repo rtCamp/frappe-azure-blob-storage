@@ -1,6 +1,6 @@
 import click
 
-from frappe_azure_blob_storage.api.blob_apis import _run_migrate_job
+from frappe_azure_blob_storage.api.azure_blob import _run_migrate_job
 
 from .site import init_site_decorate
 

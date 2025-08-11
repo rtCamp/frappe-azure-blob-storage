@@ -12,7 +12,7 @@ frappe.ui.form.on("Azure Storage Settings", {
 
 	check_connection: function (_) {
 		frappe.call({
-			method: "frappe_azure_blob_storage.api.blob_apis.test_connection",
+			method: "frappe_azure_blob_storage.api.azure_blob.test_connection",
 			callback: function (r) {
 				if (r.success === true) {
 					frappe.show_alert({
@@ -32,7 +32,7 @@ frappe.ui.form.on("Azure Storage Settings", {
 	},
 	migrate_files: function (_) {
 		frappe.call({
-			method: "frappe_azure_blob_storage.api.blob_apis.migrate_files",
+			method: "frappe_azure_blob_storage.api.azure_blob.migrate_files",
 			callback: function (r) {
 				if (r.success === true) {
 					frappe.show_alert({
