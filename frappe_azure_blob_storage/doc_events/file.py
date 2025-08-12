@@ -13,7 +13,7 @@ def after_insert(doc, method):
     This function is used to upload a file to Azure Blob Storage when a new File document is created.
     """
     store = BlobStore()
-    if not store.is_local_file(doc.file_url):
+    if not store.is_local_file(doc.file_url) or not store.settings.auto_upload_to_azure:
         return
     store.upload_local_file(doc.name)
 

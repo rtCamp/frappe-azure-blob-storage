@@ -9,6 +9,7 @@
   "authentication_method",
   "storage_account_name",
   "remove_original_files",
+  "auto_upload_to_azure",
   "column_break_gngc",
   "endpoint_suffix",
   "default_container_name",
@@ -104,13 +105,20 @@
    "fieldname": "remove_original_files",
    "fieldtype": "Check",
    "label": "Remove Original Files"
+  },
+  {
+   "default": "1",
+   "description": "Automatically upload files to Azure Storage Account",
+   "fieldname": "auto_upload_to_azure",
+   "fieldtype": "Check",
+   "label": "Auto Upload to Azure"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-08-05 19:50:20.764160",
+ "modified": "2025-08-12 14:51:39.744706",
  "modified_by": "Administrator",
  "module": "Frappe Azure Blob Storage",
  "name": "Azure Storage Settings",
