@@ -6,7 +6,7 @@ from frappe_azure_blob_storage.utils.error import generate_error_log
 from frappe_azure_blob_storage.utils.http import http_response
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET"])
 def test_connection():
     """
     Test the connection to Azure Blob Storage using the credentials
@@ -29,7 +29,7 @@ def test_connection():
         )
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET"])
 def migrate_files():
     """
     Migrate files from local storage to Azure Blob Storage.
@@ -146,7 +146,7 @@ def _run_migrate_job(is_web_request: bool = True):
             print(f"\nERROR: Migration failed. Check Error Log for details.\n{frappe.get_traceback()}")
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET"])
 def download_private_file(file_name: str):
     """
     A proxy method to securely download private files from Azure.
