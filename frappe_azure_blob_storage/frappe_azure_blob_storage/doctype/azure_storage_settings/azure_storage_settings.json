@@ -1,0 +1,142 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-08-01 01:01:37.107632",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "authentication_section",
+  "authentication_method",
+  "storage_account_name",
+  "remove_original_files",
+  "auto_upload_to_azure",
+  "column_break_gngc",
+  "endpoint_suffix",
+  "default_container_name",
+  "credentials_section",
+  "connection_string",
+  "access_key",
+  "check_connection",
+  "column_break_rvlc",
+  "sas_token_validity"
+ ],
+ "fields": [
+  {
+   "fieldname": "authentication_section",
+   "fieldtype": "Section Break",
+   "label": "Authentication"
+  },
+  {
+   "default": "Connection String",
+   "fieldname": "authentication_method",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Authentication Method",
+   "options": "Connection String\nAccess Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "storage_account_name",
+   "fieldtype": "Data",
+   "label": "Storage Account Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "credentials_section",
+   "fieldtype": "Section Break",
+   "label": "Credentials"
+  },
+  {
+   "depends_on": "eval:doc.authentication_method == \"Connection String\"",
+   "fieldname": "connection_string",
+   "fieldtype": "Password",
+   "label": "Connection String",
+   "mandatory_depends_on": "eval:doc.authentication_method == \"Connection String\""
+  },
+  {
+   "depends_on": "eval:doc.authentication_method == \"Access Key\"",
+   "fieldname": "access_key",
+   "fieldtype": "Password",
+   "label": "Access Key",
+   "mandatory_depends_on": "eval:doc.authentication_method == \"Access Key\""
+  },
+  {
+   "fieldname": "column_break_gngc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "blob.core.windows.net",
+   "description": "Usually `blob.core.windows.net`, but can be different for national/regional clouds.",
+   "fieldname": "endpoint_suffix",
+   "fieldtype": "Data",
+   "label": "Endpoint Suffix",
+   "reqd": 1
+  },
+  {
+   "description": "The container where the files will be uploaded/downloaded by default.",
+   "fieldname": "default_container_name",
+   "fieldtype": "Data",
+   "label": "Default Container Name",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.connection_string || (doc.access_key && doc.account_name)",
+   "fieldname": "check_connection",
+   "fieldtype": "Button",
+   "label": "Check Connection"
+  },
+  {
+   "fieldname": "column_break_rvlc",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "900",
+   "description": "Time for which the SAS generated for private files is valid (in seconds)",
+   "documentation_url": "https://learn.microsoft.com/en-us/azure/storage/common/storage-sas-overview",
+   "fieldname": "sas_token_validity",
+   "fieldtype": "Int",
+   "label": "SAS token validity",
+   "non_negative": 1,
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Delete the files from the Frappe's local storage",
+   "fieldname": "remove_original_files",
+   "fieldtype": "Check",
+   "label": "Remove Original Files"
+  },
+  {
+   "default": "1",
+   "description": "Automatically upload files to Azure Storage Account",
+   "fieldname": "auto_upload_to_azure",
+   "fieldtype": "Check",
+   "label": "Auto Upload to Azure"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2025-08-12 14:51:39.744706",
+ "modified_by": "Administrator",
+ "module": "Frappe Azure Blob Storage",
+ "name": "Azure Storage Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
