@@ -2,6 +2,7 @@ import os
 import re
 import time
 from datetime import timedelta
+from typing import ClassVar
 from urllib.parse import parse_qs, quote, urlparse
 
 import frappe
@@ -26,6 +27,12 @@ class BlobStore:
     This class provides methods to upload and download blobs from Azure Blob Storage.
     It requires an instance of `BlobServiceClient` to interact with the storage account.
     """
+
+    AZURE_FILE_FILTERS: ClassVar = [
+        ["file_url", "is", "set"],
+        ["file_url", "not like", "http%"],
+        ["file_url", "not like", "/api/method%"],
+    ]
 
     def __init__(self, blob_service_client: BlobServiceClient | None = None):
         """

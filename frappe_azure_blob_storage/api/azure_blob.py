@@ -37,13 +37,34 @@ def migrate_files():
     and uploads them to the configured Azure Blob Storage container.
     """
     try:
-        frappe.enqueue(
-            _run_migrate_job,
-            queue="long",
-            job_id="migrate_files_to_azure",
-            deduplicate=True,
-            is_web_request=True,
-        )
+        page_idx = 0
+        page_size = 100
+
+        while True:
+            files_list = frappe.get_all(
+                "File",
+                fields=["name", "file_url", "file_name"],
+                filters=BlobStore.AZURE_FILE_FILTERS,
+                limit_start=(page_idx * page_size),
+                limit_page_length=page_size,
+                order_by="creation asc",
+            )
+            if not files_list:
+                # If no files are found in the first place, we can return
+                if page_idx == 0:
+                    return http_response(success=False, message=_("No new local files to migrate."))
+
+                break
+
+            frappe.enqueue(
+                _run_migrate_job,
+                queue="long",
+                job_id=f"migrate_files_to_azure-part_{page_idx}",
+                deduplicate=True,
+                is_web_request=True,
+                files_list=files_list,
+            )
+            page_idx += 1
 
         return http_response(_("File migration to Azure Blob Storage has been queued successfully."))
 
@@ -54,7 +75,7 @@ def migrate_files():
         )
 
 
-def _run_migrate_job(is_web_request: bool = True):
+def _run_migrate_job(files_list: list | None = None, is_web_request: bool = True):
     """
     Migrate files from local storage to Azure Blob Storage.
     This function assumes that the files are stored in a specific directory
@@ -63,24 +84,15 @@ def _run_migrate_job(is_web_request: bool = True):
 
     try:
         blob_store = BlobStore()
-        files_list = frappe.get_all(
-            "File",
-            fields=["name", "file_url", "file_name"],
-            filters=[
-                ["file_url", "is", "set"],
-                ["file_url", "not like", "http%"],
-                ["file_url", "not like", "/api/method%"],
-            ],
-        )
+        if files_list is None:
+            files_list = frappe.get_all(
+                "File",
+                fields=["name", "file_url", "file_name"],
+                filters=BlobStore.AZURE_FILE_FILTERS,
+            )
         total_files = len(files_list)
         if not total_files:
-            if is_web_request:
-                frappe.publish_progress(
-                    100,
-                    title=_("Azure File Migration"),
-                    description=_("No new local files to migrate."),
-                )
-            else:
+            if not is_web_request:
                 print("No new local files to migrate.")
             return
 
