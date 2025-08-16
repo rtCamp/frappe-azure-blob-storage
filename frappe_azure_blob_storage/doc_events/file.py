@@ -3,11 +3,12 @@ import frappe
 from frappe_azure_blob_storage.blob_controllers.blob_store import (
     BlobStore,
     change_file_privacy,
+    upload_local_file,
 )
 from frappe_azure_blob_storage.utils.error import generate_error_log
 
 
-def after_insert(doc, method):
+def before_insert(doc, method):
     """
     Event handler for the 'after_insert' event of the File document.
     This function is used to upload a file to Azure Blob Storage when a new File document is created.
@@ -15,7 +16,8 @@ def after_insert(doc, method):
     store = BlobStore()
     if not store.is_local_file(doc.file_url) or not store.settings.auto_upload_to_azure:
         return
-    store.upload_local_file(doc.name)
+
+    doc = upload_local_file(file_doc=doc)
 
 
 def on_update(doc, method):
@@ -23,7 +25,11 @@ def on_update(doc, method):
     Event handler for the 'on_update' event of the File document.
     This function is used to update the File URL if the file is stored in Azure Blob Storage.
     """
-    if not doc.has_value_changed("is_private") or BlobStore.is_local_file(doc.file_url):
+    if (
+        doc.flags.in_insert  # ignore if this is a new file being inserted
+        or not doc.has_value_changed("is_private")
+        or BlobStore.is_local_file(doc.file_url)
+    ):
         return
 
     blob_store = BlobStore()
