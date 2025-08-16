@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import ClassVar
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -106,18 +106,19 @@ class BlobStore:
         if cached_url and not ignore_cache:
             return cached_url
 
-        # Generate a SAS token that's valid for 15 minutes
+        # Generate a SAS token that's valid for given time
         sas_token = generate_blob_sas(
             account_name=blob_client.account_name,
             container_name=container_name,
             blob_name=blob_name,
             account_key=self.blob_service_client.credential.account_key,
             permission=BlobSasPermissions(read=True),
-            expiry=frappe.utils.now_datetime() + timedelta(seconds=self.settings.sas_token_validity),
+            # use UTC timezone for expiry
+            expiry=datetime.now() + timedelta(seconds=self.settings.sas_token_validity),
         )
 
         full_url = f"{blob_client.url}?{sas_token}"
-        # Cache the URL expire just 30 seconds before the actual expiry
+        # Cache the URL, expire just 30 seconds before the actual expiry
         frappe.cache().set_value(cache_key, full_url, expires_in_sec=self.settings.sas_token_validity - 30)
 
         return full_url
