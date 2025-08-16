@@ -16,9 +16,6 @@ def before_insert(doc, method):
     store = BlobStore()
     if not store.is_local_file(doc.file_url) or not store.settings.auto_upload_to_azure:
         return
-    from frappe.utils.file_manager import get_file_path
-
-    generate_error_log("debug 1", get_file_path(doc.file_url))
 
     doc = upload_local_file(file_doc=doc)
 
