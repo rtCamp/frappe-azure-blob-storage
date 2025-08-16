@@ -102,7 +102,7 @@ class BlobStore:
 
         blob_client = self.blob_service_client.get_blob_client(container=container_name, blob=blob_name)
         cache_key = f"azure_blob_sas_url::{container_name}::{blob_name}"
-        cached_url = frappe.cache().get(cache_key)
+        cached_url = frappe.cache().get_value(cache_key)
         if cached_url and not ignore_cache:
             return cached_url
 
