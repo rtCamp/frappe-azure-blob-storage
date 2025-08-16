@@ -466,7 +466,7 @@ def upload_local_file(
             file_doc = frappe.get_doc("File", file_id)
 
         file_name = file_doc.file_name
-        parent_doctype = file_doc.attached_to_doctype or "File"
+        parent_doctype = file_doc.attached_to_doctype
         parent_name = file_doc.attached_to_name
         is_private = file_doc.is_private
         file_url = file_doc.file_url
