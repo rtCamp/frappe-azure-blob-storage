@@ -1,7 +1,7 @@
 import frappe
 from frappe import _
 
-from frappe_azure_blob_storage.blob_controllers.blob_store import BlobStore
+from frappe_azure_blob_storage.blob_controllers.blob_store import BlobStore, upload_local_file
 from frappe_azure_blob_storage.utils.error import generate_error_log
 from frappe_azure_blob_storage.utils.http import http_response
 
@@ -83,7 +83,6 @@ def _run_migrate_job(files_list: list | None = None, is_web_request: bool = True
     """
 
     try:
-        blob_store = BlobStore()
         if files_list is None:
             files_list = frappe.get_all(
                 "File",
@@ -100,7 +99,7 @@ def _run_migrate_job(files_list: list | None = None, is_web_request: bool = True
             file_id = file["name"]
             file_name = file["file_name"]
             try:
-                blob_store.upload_local_file(file_id)
+                upload_local_file(file_id)
             except FileNotFoundError:
                 generate_error_log(
                     "File Migration Error",
@@ -165,6 +164,11 @@ def download_private_file(file_name: str):
     It checks file permissions and then redirects to a temporary SAS URL.
     """
     try:
+        # --- Strip the ?fid=... query parameter ---
+        # This ensures we get the clean file path from the URL.
+        if "?fid=" in file_name:
+            file_name = file_name.split("?fid=")[0]
+
         # 1. Get the File document
         file_url = BlobStore.get_private_file_link(file_name)
         file_doc = frappe.get_doc("File", {"file_url": file_url})
@@ -186,9 +190,9 @@ def download_private_file(file_name: str):
 
         # 4. Generate the SAS URL
         blob_store = BlobStore()
-        blob_name = file_name
+        # The blob_name is the cleaned file_name from the start of the function
         sas_url = blob_store.generate_sas_url(
-            blob_name=blob_name,
+            blob_name=file_name,
             container_name=blob_store.get_private_container_name(),
         )
 

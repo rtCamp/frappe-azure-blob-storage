@@ -2,7 +2,7 @@ app_name = "frappe_azure_blob_storage"
 app_title = "Frappe Azure Blob Storage"
 app_publisher = "rtCamp"
 app_description = "Blob Storage support for Azure"
-app_email = "erp@rtcamp.com"
+app_email = "frappe@rtcamp.com"
 app_license = "agpl-3.0"
 
 # Apps
@@ -139,7 +139,7 @@ app_license = "agpl-3.0"
 
 doc_events = {
     "File": {
-        "after_insert": "frappe_azure_blob_storage.doc_events.file.after_insert",
+        "before_insert": "frappe_azure_blob_storage.doc_events.file.before_insert",
         "on_update": "frappe_azure_blob_storage.doc_events.file.on_update",
         "on_trash": "frappe_azure_blob_storage.doc_events.file.on_trash",
     }

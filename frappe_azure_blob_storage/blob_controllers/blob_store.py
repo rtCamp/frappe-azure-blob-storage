@@ -8,13 +8,9 @@ from urllib.parse import parse_qs, quote, urlparse
 import frappe
 import magic
 from azure.core.exceptions import AzureError, ResourceExistsError
-from azure.storage.blob import (
-    BlobSasPermissions,
-    BlobServiceClient,
-    ContentSettings,
-    generate_blob_sas,
-)
+from azure.storage.blob import BlobSasPermissions, BlobServiceClient, ContentSettings, generate_blob_sas
 from frappe import _
+from frappe.model.document import Document
 from frappe.utils.file_manager import get_file_path
 
 from frappe_azure_blob_storage.utils.error import generate_error_log
@@ -226,53 +222,13 @@ class BlobStore:
         final_key = "/".join(part for part in path_parts if part)
         return final_key
 
-    def upload_local_file(self, file_id: str, remove_original: bool | None = None) -> None:
-        """
-        Uploads an existing file to Azure Blob Storage.
-        """
-        try:
-            file_doc = frappe.get_doc("File", file_id)
-            file_name = file_doc.file_name
-            parent_doctype = file_doc.attached_to_doctype or "File"
-            parent_name = file_doc.attached_to_name
-            is_private = file_doc.is_private
-            file_url = file_doc.file_url
-
-            if not file_url:
-                generate_error_log(
-                    _("File Not Found"),
-                    _("File {}:{} does not exist in the system.").format(file_id, file_url),
-                    throw_exc=True,
-                )
-
-            file_blob_key = self.blob_key_generator(file_name, parent_doctype, parent_name, is_private)
-            full_file_path = get_file_path(file_id)
-
-            blob_url = self.upload_blob(
-                file_key=file_blob_key,
-                file_path=full_file_path,
-                is_private=is_private,
-            )
-            if remove_original or (remove_original is None and self.settings.remove_original_files == 1):
-                os.remove(full_file_path)
-
-            frappe.db.set_value(
-                "File",
-                file_id,
-                "file_url",
-                blob_url,
-            )
-            frappe.db.commit()
-
-        except AzureError as e:
-            generate_error_log(
-                _("Azure Blob Upload Error"),
-                _("Failed to upload file to Azure Blob Storage."),
-                exception=e,
-                throw_exc=True,
-            )
-
-    def upload_blob(self, file_key: str, file_path: str, is_private: bool = True) -> str:
+    def upload_blob(
+        self,
+        file_key: str,
+        file_path: str,
+        file_content: bytes | None = None,
+        is_private: bool = True,
+    ) -> str:
         """
         Uploads a file to Azure Blob Storage and returns the blob URL.
         """
@@ -281,16 +237,22 @@ class BlobStore:
                 container=(self.get_public_container_name() if not is_private else self.get_private_container_name()),
                 blob=file_key,
             )
-            full_file_path = file_path
-            with open(full_file_path, "rb") as data:
-                blob_client.upload_blob(
-                    data,
-                    overwrite=True,
-                    content_settings=ContentSettings(
-                        content_type=magic.from_file(full_file_path, mime=True),
-                        content_disposition=f"inline; filename={quote(os.path.basename(full_file_path))}",
-                    ),
-                )
+
+            data_to_upload = None
+            if file_content:
+                data_to_upload = file_content
+            else:
+                with open(file_path, "rb") as f:
+                    data_to_upload = f.read()
+
+            blob_client.upload_blob(
+                data_to_upload,
+                overwrite=True,
+                content_settings=ContentSettings(
+                    content_type=magic.from_buffer(file_content[:2048], mime=True),
+                    content_disposition=f"inline; filename={quote(os.path.basename(file_path))}",
+                ),
+            )
             return blob_client.url if not is_private else self.get_private_file_link(file_key)
         except AzureError as e:
             generate_error_log(
@@ -470,6 +432,94 @@ def change_file_privacy(
         generate_error_log(
             _("Azure Blob Move Error"),
             _("Failed to move blob in Azure Blob Storage."),
+            exception=e,
+            throw_exc=True,
+        )
+
+
+def upload_local_file(
+    file_doc: Document | None = None,
+    file_id: str | None = None,
+    remove_original: bool | None = None,
+) -> None:
+    """
+    Uploads an existing file to Azure Blob Storage.
+
+    :param file_id: The name (ID) of the File document.
+    :param file_doc: A pre-loaded File document object.
+    :param remove_original: If True, deletes the local file after a successful upload.
+    """
+    if not file_doc and not file_id:
+        raise TypeError(_("Either 'file_doc' or 'file_id' must be provided to upload a file."))
+
+    try:
+        blob_store = BlobStore()
+
+        if file_id is not None:
+            file_doc = frappe.get_doc("File", file_id)
+
+        file_name = file_doc.file_name
+        parent_doctype = file_doc.attached_to_doctype or "File"
+        parent_name = file_doc.attached_to_name
+        is_private = file_doc.is_private
+        file_url = file_doc.file_url
+
+        if not file_url:
+            generate_error_log(
+                _("File Not Found"),
+                _("File {}:{} does not exist in the system.").format(file_id, file_url),
+                throw_exc=True,
+            )
+
+        file_blob_key = blob_store.blob_key_generator(file_name, parent_doctype, parent_name, is_private)
+        full_file_path = get_file_path(file_id if file_id else file_doc.file_name)
+
+        blob_url = blob_store.upload_blob(
+            file_key=file_blob_key,
+            file_content=file_doc.get_content() if file_doc else None,
+            file_path=full_file_path,
+            is_private=is_private,
+        )
+        if remove_original or (remove_original is None and blob_store.settings.remove_original_files == 1):
+            if file_id:
+                os.remove(full_file_path)
+            else:
+                file_doc.delete_file_data_content()
+
+        folder_name = "Home/Attachments" if parent_doctype else "Home"
+
+        if file_id:
+            frappe.db.sql(
+                """UPDATE `tabFile` SET file_url=%s, folder=%s,
+                old_parent=%s, content_hash=%s WHERE name=%s""",
+                (
+                    blob_url,
+                    folder_name,
+                    folder_name,
+                    file_blob_key[:50],
+                    file_id,
+                ),
+            )
+        else:
+            file_doc.file_url = blob_url
+            file_doc.folder = folder_name
+            file_doc.old_parent = folder_name
+            file_doc.content_hash = file_blob_key[:50]
+
+        if parent_doctype and frappe.get_meta(parent_doctype).get("image_field"):
+            frappe.db.set_value(
+                parent_doctype,
+                parent_name,
+                frappe.get_meta(parent_doctype).get("image_field"),
+                blob_url,
+            )
+
+        return file_doc
+
+    except AzureError as e:
+        generate_error_log(
+            _("Azure Blob Upload Error"),
+            _("Failed to upload file to Azure Blob Storage."),
             exception=e,
             throw_exc=True,
         )
