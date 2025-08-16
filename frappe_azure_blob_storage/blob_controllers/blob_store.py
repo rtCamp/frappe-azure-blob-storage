@@ -33,6 +33,7 @@ class BlobStore:
         ["file_url", "is", "set"],
         ["file_url", "not like", "http%"],
         ["file_url", "not like", "/api/method%"],
+        ["custom_uploaded_to_azure", "=", 0],
     ]
 
     def __init__(self, blob_service_client: BlobServiceClient | None = None):
@@ -298,7 +299,7 @@ class BlobStore:
 
     @classmethod
     def is_local_file(cls, file_url: str) -> bool:
-        return file_url and (not file_url.startswith("http") and not file_url.startswith("/api/method"))
+        return file_url.startswith(("/files/", "/private/files/"))
 
     def parse_url(self, file_url: str) -> frappe._dict | None:
         """
@@ -495,22 +496,23 @@ def upload_local_file(
         folder_name = "Home/Attachments" if parent_doctype else "Home"
 
         if file_id:
-            frappe.db.sql(
-                """UPDATE `tabFile` SET file_url=%s, folder=%s,
-                old_parent=%s, content_hash=%s WHERE name=%s""",
-                (
-                    blob_url,
-                    folder_name,
-                    folder_name,
-                    file_blob_key[:50],
-                    file_id,
-                ),
+            frappe.db.set_value(
+                "File",
+                file_id,
+                {
+                    "file_url": blob_url,
+                    "folder": folder_name,
+                    "old_parent": folder_name,
+                    "content_hash": file_blob_key[:254],
+                    "custom_uploaded_to_azure": 1,
+                },
             )
         else:
             file_doc.file_url = blob_url
             file_doc.folder = folder_name
             file_doc.old_parent = folder_name
             file_doc.content_hash = file_blob_key[:254]
+            file_doc.custom_uploaded_to_azure = 1
 
         if parent_doctype and frappe.get_meta(parent_doctype).get("image_field"):
             frappe.db.set_value(

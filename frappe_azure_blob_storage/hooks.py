@@ -145,6 +145,17 @@ doc_events = {
     }
 }
 
+
+# Fixtures
+# ----------
+fixtures = [
+    {
+        "dt": "Custom Field",
+        "filters": [["module", "in", ["Frappe Azure Blob Storage"]]],
+    },
+]
+
+
 # Scheduled Tasks
 # ---------------
 
