@@ -8,7 +8,12 @@ from urllib.parse import parse_qs, quote, urlparse
 import frappe
 import magic
 from azure.core.exceptions import AzureError, ResourceExistsError
-from azure.storage.blob import BlobSasPermissions, BlobServiceClient, ContentSettings, generate_blob_sas
+from azure.storage.blob import (
+    BlobSasPermissions,
+    BlobServiceClient,
+    ContentSettings,
+    generate_blob_sas,
+)
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils.file_manager import get_file_path
@@ -472,7 +477,7 @@ def upload_local_file(
             )
 
         file_blob_key = blob_store.blob_key_generator(file_name, parent_doctype, parent_name, is_private)
-        full_file_path = get_file_path(file_id if file_id else file_doc.file_name)
+        full_file_path = get_file_path(file_id if file_id else file_doc.file_url)
 
         blob_url = blob_store.upload_blob(
             file_key=file_blob_key,
