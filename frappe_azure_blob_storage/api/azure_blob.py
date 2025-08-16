@@ -20,7 +20,7 @@ def test_connection():
         blob_store = BlobStore()
         blob_store.blob_service_client.get_service_properties()  # This will raise an error if connection fails
 
-        return http_response("Connection to Azure Blob Storage is successful.")
+        return http_response(_("Connection to Azure Blob Storage is successful."))
 
     except Exception as e:
         return http_response(
@@ -99,7 +99,7 @@ def _run_migrate_job(files_list: list | None = None, is_web_request: bool = True
             file_id = file["name"]
             file_name = file["file_name"]
             try:
-                upload_local_file(file_id)
+                upload_local_file(file_id=file_id)
             except FileNotFoundError:
                 generate_error_log(
                     "File Migration Error",

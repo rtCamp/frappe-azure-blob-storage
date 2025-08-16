@@ -1,7 +1,7 @@
 import os
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import ClassVar
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -114,7 +114,7 @@ class BlobStore:
             account_key=self.blob_service_client.credential.account_key,
             permission=BlobSasPermissions(read=True),
             # use UTC timezone for expiry
-            expiry=datetime.now() + timedelta(seconds=self.settings.sas_token_validity),
+            expiry=frappe.utils.get_datetime_in_timezone("UTC") + timedelta(seconds=self.settings.sas_token_validity),
         )
 
         full_url = f"{blob_client.url}?{sas_token}"
@@ -510,7 +510,7 @@ def upload_local_file(
             file_doc.file_url = blob_url
             file_doc.folder = folder_name
             file_doc.old_parent = folder_name
-            file_doc.content_hash = file_blob_key[:50]
+            file_doc.content_hash = file_blob_key[:254]
 
         if parent_doctype and frappe.get_meta(parent_doctype).get("image_field"):
             frappe.db.set_value(
