@@ -107,7 +107,7 @@
    "label": "Remove Original Files"
   },
   {
-   "default": "1",
+   "default": "0",
    "description": "Automatically upload files to Azure Storage Account",
    "fieldname": "auto_upload_to_azure",
    "fieldtype": "Check",
@@ -118,7 +118,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-08-12 14:51:39.744706",
+ "modified": "2025-10-07 16:38:39.958306",
  "modified_by": "Administrator",
  "module": "Frappe Azure Blob Storage",
  "name": "Azure Storage Settings",
