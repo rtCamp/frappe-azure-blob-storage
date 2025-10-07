@@ -1,10 +1,6 @@
 import frappe
 
-from frappe_azure_blob_storage.blob_controllers.blob_store import (
-    BlobStore,
-    change_file_privacy,
-    upload_local_file,
-)
+from frappe_azure_blob_storage.blob_controllers.blob_store import BlobStore, change_file_privacy, upload_local_file
 from frappe_azure_blob_storage.utils.error import generate_error_log
 
 
@@ -13,8 +9,12 @@ def before_insert(doc, method):
     Event handler for the 'after_insert' event of the File document.
     This function is used to upload a file to Azure Blob Storage when a new File document is created.
     """
+    settings = frappe.get_single("Azure Storage Settings")
+    if not settings.auto_upload_to_azure:
+        return
+
     store = BlobStore()
-    if not store.is_local_file(doc.file_url) or not store.settings.auto_upload_to_azure:
+    if not store.is_local_file(doc.file_url):
         return
 
     doc = upload_local_file(file_doc=doc)
