@@ -15,7 +15,7 @@ from azure.storage.blob import (
     generate_blob_sas,
 )
 from frappe import _
-from frappe.model.document import Document
+from frappe.core.doctype.file.file import File
 from frappe.utils.file_manager import get_file_path
 
 from frappe_azure_blob_storage.utils.error import generate_error_log
@@ -445,7 +445,7 @@ def change_file_privacy(
 
 
 def upload_local_file(
-    file_doc: Document | None = None,
+    file_doc: File | None = None,
     file_id: str | None = None,
     remove_original: bool | None = None,
 ) -> None:
