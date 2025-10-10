@@ -2,7 +2,7 @@ app_name = "frappe_azure_blob_storage"
 app_title = "Frappe Azure Blob Storage"
 app_publisher = "rtCamp"
 app_description = "Blob Storage support for Azure"
-app_email = "erp@rtcamp.com"
+app_email = "frappe@rtcamp.com"
 app_license = "agpl-3.0"
 
 # Apps
@@ -130,20 +130,31 @@ app_license = "agpl-3.0"
 # Override standard doctype classes
 
 # override_doctype_class = {
-# 	"ToDo": "custom_app.overrides.CustomToDo"
+#     "File": "frappe_azure_blob_storage.doc_events.file.OverrideFile",
 # }
 
 # Document Events
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "File": {
+        "before_insert": "frappe_azure_blob_storage.doc_events.file.before_insert",
+        "on_update": "frappe_azure_blob_storage.doc_events.file.on_update",
+        "on_trash": "frappe_azure_blob_storage.doc_events.file.on_trash",
+    }
+}
+
+
+# Fixtures
+# ----------
+fixtures = [
+    {
+        "dt": "Custom Field",
+        "filters": [["module", "in", ["Frappe Azure Blob Storage"]]],
+    },
+]
+
 
 # Scheduled Tasks
 # ---------------
@@ -236,9 +247,8 @@ app_license = "agpl-3.0"
 # ]
 
 # Automatically update python controller files with type annotations for this app.
-# export_python_type_annotations = True
+export_python_type_annotations = True
 
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
-
