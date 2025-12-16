@@ -142,7 +142,7 @@ class BlobStore:
                     )
                 return BlobServiceClient.from_connection_string(connection_string)
 
-            elif auth_method == "Account Access Key":
+            elif auth_method == "Access Key":
                 account_name = self.settings.storage_account_name
                 access_key = self.settings.get_password("access_key")
                 if not account_name or not access_key:
