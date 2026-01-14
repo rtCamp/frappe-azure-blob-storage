@@ -10,7 +10,7 @@ dynamic = ["version"]
 dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
     "azure-storage-blob~=12.28.0",
-    "azure-identity~=1.23.1",
+    "azure-identity~=1.25.1",
     "python-magic~=0.4.27",
 ]
 
