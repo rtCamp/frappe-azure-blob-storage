@@ -234,6 +234,9 @@ class BlobStore:
         Uploads a file to Azure Blob Storage and returns the blob URL.
         """
         try:
+            if not self.settings.auto_upload_to_azure:
+                return file_path
+
             blob_client = self.blob_service_client.get_blob_client(
                 container=(
                     self.get_public_container_name() if not is_file_private else self.get_private_container_name()
@@ -297,6 +300,11 @@ class BlobStore:
     def is_local_file(cls, file_url: str) -> bool:
         return file_url.startswith(("/files/", "/private/files/"))
 
+    def is_ignored_dtype(self, doctype: str) -> bool:
+        ignored_dtypes = self.settings.ignored_doctypes or []
+        ignored_dtypes = [dtype._doctype.strip() for dtype in ignored_dtypes if dtype._doctype.strip()]
+        return doctype in ignored_dtypes
+
     def parse_url(self, file_url: str) -> str | None:
         """
         Parses a Frappe/Azure file URL to extract its components.
@@ -344,6 +352,8 @@ def change_file_privacy(
     Moves a blob from one location to another within Azure Blob Storage.
     """
     file_doc = frappe.get_doc("File", file_id)
+    if not file_doc.custom_uploaded_to_azure:
+        return
     try:
         blob_store = BlobStore()
         private_container = blob_store.get_private_container_name()
@@ -430,7 +440,7 @@ def upload_local_file(
     file_doc: File | None = None,
     file_id: str | None = None,
     remove_original: bool | None = None,
-) -> None:
+) -> File | None:
     """
     Uploads an existing file to Azure Blob Storage.
 
@@ -446,6 +456,13 @@ def upload_local_file(
 
         if file_id is not None:
             file_doc = frappe.get_doc("File", file_id)
+
+        if (
+            file_doc.custom_uploaded_to_azure
+            or blob_store.is_ignored_dtype(file_doc.attached_to_doctype)
+            or not blob_store.settings.auto_upload_to_azure
+        ):
+            return file_doc
 
         file_name = file_doc.file_name
         parent_doctype = file_doc.attached_to_doctype

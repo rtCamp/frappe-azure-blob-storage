@@ -13,6 +13,7 @@
   "column_break_gngc",
   "endpoint_suffix",
   "default_container_name",
+  "ignored_doctypes",
   "credentials_section",
   "connection_string",
   "access_key",
@@ -112,13 +113,20 @@
    "fieldname": "auto_upload_to_azure",
    "fieldtype": "Check",
    "label": "Auto Upload to Azure"
+  },
+  {
+   "description": "DocTypes to ignore when uploading files to blob storage.",
+   "fieldname": "ignored_doctypes",
+   "fieldtype": "Table MultiSelect",
+   "label": "Ignored DocTypes",
+   "options": "Azure Storage Ignored DocTyoe"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-10-07 16:38:39.958306",
+ "modified": "2026-04-06 07:18:45.495485",
  "modified_by": "Administrator",
  "module": "Frappe Azure Blob Storage",
  "name": "Azure Storage Settings",

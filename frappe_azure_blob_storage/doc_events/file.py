@@ -29,6 +29,7 @@ def on_update(doc, method):
         doc.flags.in_insert  # ignore if this is a new file being inserted
         or not doc.has_value_changed("is_private")
         or BlobStore.is_local_file(doc.file_url)
+        or BlobStore.is_ignored_dtype(doc.attached_to_doctype)
     ):
         return
 
@@ -67,6 +68,10 @@ def on_trash(doc, method):
         return
 
     blob_store = BlobStore()
+
+    if blob_store.is_ignored_dtype(doc.attached_to_doctype):
+        return
+
     blob_name = blob_store.parse_url(doc.file_url)
     if not blob_name:
         generate_error_log(
