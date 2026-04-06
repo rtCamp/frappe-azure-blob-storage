@@ -203,19 +203,8 @@ class BlobStore:
 
         file_name = self.strip_special_chars(frappe.scrub(file_name))
         unique_key = frappe.generate_hash(length=8)
-        today = frappe.utils.now_datetime()
-        year, month, day = (
-            today.strftime("%Y"),
-            today.strftime("%m"),
-            today.strftime("%d"),
-        )
 
         path_parts = [
-            year,
-            month,
-            day,
-            parent_doctype,
-            parent_name,
             unique_key,
             file_name,
         ]
