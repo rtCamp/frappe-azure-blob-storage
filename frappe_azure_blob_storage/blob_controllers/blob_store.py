@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import time
@@ -7,6 +8,8 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import frappe
 import magic
+
+logging.getLogger("azure").setLevel(logging.WARNING)
 from azure.core.exceptions import AzureError, ResourceExistsError
 from azure.storage.blob import (
     BlobSasPermissions,
