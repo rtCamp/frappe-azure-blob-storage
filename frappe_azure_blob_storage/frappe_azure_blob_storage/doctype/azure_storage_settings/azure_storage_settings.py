@@ -14,8 +14,8 @@ class AzureStorageSettings(Document):
     if TYPE_CHECKING:
         from frappe.types import DF
 
-        from frappe_azure_blob_storage.frappe_azure_blob_storage.doctype.azure_storage_ignored_doctyoe.azure_storage_ignored_doctyoe import (
-            AzureStorageIgnoredDocTyoe,
+        from frappe_azure_blob_storage.frappe_azure_blob_storage.doctype.azure_storage_ignored_doctype.azure_storage_ignored_doctype import (
+            AzureStorageIgnoredDocType,
         )
 
         access_key: DF.Password | None
@@ -24,7 +24,7 @@ class AzureStorageSettings(Document):
         connection_string: DF.Password | None
         default_container_name: DF.Data
         endpoint_suffix: DF.Data
-        ignored_doctypes: DF.TableMultiSelect[AzureStorageIgnoredDocTyoe]
+        ignored_doctypes: DF.TableMultiSelect[AzureStorageIgnoredDocType]
         remove_original_files: DF.Check
         sas_token_validity: DF.Int
         storage_account_name: DF.Data

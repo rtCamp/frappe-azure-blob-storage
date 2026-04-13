@@ -25,7 +25,7 @@
  "modified": "2026-04-06 07:17:40.925356",
  "modified_by": "Administrator",
  "module": "Frappe Azure Blob Storage",
- "name": "Azure Storage Ignored DocTyoe",
+ "name": "Azure Storage Ignored DocType",
  "naming_rule": "Random",
  "owner": "Administrator",
  "permissions": [],
