@@ -25,11 +25,12 @@ def on_update(doc, method):
     Event handler for the 'on_update' event of the File document.
     This function is used to update the File URL if the file is stored in Azure Blob Storage.
     """
+    blob_store = BlobStore()
     if (
         doc.flags.in_insert  # ignore if this is a new file being inserted
         or not doc.has_value_changed("is_private")
         or BlobStore.is_local_file(doc.file_url)
-        or BlobStore.is_ignored_dtype(doc.attached_to_doctype)
+        or blob_store.is_ignored_dtype(doc.attached_to_doctype)
     ):
         return
 

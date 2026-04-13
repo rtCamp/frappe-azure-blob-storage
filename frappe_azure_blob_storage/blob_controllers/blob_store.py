@@ -299,15 +299,13 @@ class BlobStore:
 
     def parse_url(self, file_url: str) -> str | None:
         """
-        Parses a Frappe/Azure file URL to extract its components.
+        Parses a Frappe/Azure file URL to extract the blob name.
 
         Args:
-            file_url: The URL of the file, which can be a private proxy URL
-                    or a direct public Azure Blob Storage URL.
+            file_url: The URL of the file (proxy /api/method/ format).
 
         Returns:
-            A dict containing (container_name, blob_name, is_private).
-            Returns None if the URL format is not recognized.
+            The blob name string, or None if the URL format is not recognized.
         """
         if not file_url:
             return None
@@ -321,17 +319,6 @@ class BlobStore:
             if blob_name:
                 return blob_name
 
-        # --- Handle Public Direct Azure URLs ---
-        # e.g., https://account.blob.core.windows.net/container/path/to/blob.pdf
-        elif self.settings.endpoint_suffix in parsed_url.netloc:
-            # Path will be like /container_name/path/to/blob.pdf
-            path_parts = parsed_url.path.strip("/").split("/")
-            if path_parts:
-                # The rest of the path is the blob name
-                blob_name = "/".join(path_parts[1:])
-                return blob_name
-
-        # If neither format matches
         return None
 
 
