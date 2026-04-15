@@ -32,6 +32,9 @@ def on_update(doc, method):
     ):
         return
 
+    settings = frappe.get_single("Azure Storage Settings")
+    if not settings.auto_upload_to_azure:
+        return
     blob_store = BlobStore()
     if blob_store.is_ignored_dtype(doc.attached_to_doctype):
         return
