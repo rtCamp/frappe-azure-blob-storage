@@ -157,8 +157,10 @@ def _run_migrate_job(files_list: list | None = None, is_web_request: bool = True
             print(f"\nERROR: Migration failed. Check Error Log for details.\n{frappe.get_traceback()}")
 
 
-@frappe.whitelist(methods=["GET"])
-def download_private_file(file_name: str):
+@frappe.whitelist(methods=["GET"], allow_guest=True)  # nosemgrep
+def download_file(file_name: str):
+    from frappe.utils.response import download_private_file
+
     """
     A proxy method to securely download private files from Azure.
     It checks file permissions and then redirects to a temporary SAS URL.
@@ -170,38 +172,38 @@ def download_private_file(file_name: str):
             file_name = file_name.split("?fid=")[0]
 
         # 1. Get the File document
-        file_url = BlobStore.get_private_file_link(file_name)
-        file_doc = frappe.get_doc("File", {"file_url": file_url})
+        file_url = BlobStore.get_file_link(file_name)
+        file_doc = frappe.db.exists("File", {"file_url": file_url})
 
-        # 2. Check permissions
-        if not file_doc.is_private:
-            # If for some reason a public file URL points here, just redirect
-            frappe.local.response["type"] = "redirect"
-            frappe.local.response["location"] = file_doc.file_url
-            return
+        if not file_doc:
+            raise frappe.DoesNotExistError
 
-        # This is Frappe's standard permission check for files
-        if not frappe.has_permission("File", "read", file_doc):
-            raise frappe.PermissionError
+        file_doc = frappe.get_doc("File", file_doc)
 
-        # 3. Ensure the file is actually in Azure
+        # 3. If file is local let frappe handle it.
         if BlobStore.is_local_file(file_doc.file_url):
-            raise frappe.ValidationError(_("This file is not stored on Azure."))
+            return download_private_file(file_doc.file_url)
+
+        if not file_doc.is_downloadable():
+            raise frappe.PermissionError
 
         # 4. Generate the SAS URL
         blob_store = BlobStore()
+
+        if file_doc.is_private:
+            container_name = blob_store.get_private_container_name()
+        else:
+            container_name = blob_store.get_public_container_name()
+
         # The blob_name is the cleaned file_name from the start of the function
-        sas_url = blob_store.generate_sas_url(
-            blob_name=file_name,
-            container_name=blob_store.get_private_container_name(),
-        )
+        sas_url = blob_store.generate_sas_url(blob_name=file_name, container_name=container_name)
 
         # 5. Redirect the user to the temporary URL
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = sas_url
 
-    except frappe.DoesNotExistError:
-        frappe.throw(_("File not found."), frappe.NotFound)
-    except Exception as e:
+    except (frappe.DoesNotExistError, frappe.PermissionError):
+        raise
+    except Exception:
         frappe.log_error(title="Private File Download", message=frappe.get_traceback())
-        frappe.throw(_("Could not retrieve file. Error: {0}").format(str(e)))
+        frappe.throw(_("Something went wrong while downloading the file."))

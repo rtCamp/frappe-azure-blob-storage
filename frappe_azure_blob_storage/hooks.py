@@ -129,9 +129,9 @@ app_license = "agpl-3.0"
 # ---------------
 # Override standard doctype classes
 
-# override_doctype_class = {
-#     "File": "frappe_azure_blob_storage.doc_events.file.OverrideFile",
-# }
+override_doctype_class = {
+    "File": "frappe_azure_blob_storage.overrides.file.FileOverride",
+}
 
 # Document Events
 # ---------------

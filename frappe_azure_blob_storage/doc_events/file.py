@@ -32,9 +32,15 @@ def on_update(doc, method):
     ):
         return
 
+    settings = frappe.get_single("Azure Storage Settings")
+    if not settings.auto_upload_to_azure:
+        return
     blob_store = BlobStore()
-    blob_details = blob_store.parse_url(doc.file_url)
-    if not blob_details:
+    if blob_store.is_ignored_dtype(doc.attached_to_doctype):
+        return
+
+    blob_name = blob_store.parse_url(doc.file_url)
+    if not blob_name:
         generate_error_log(
             "File URL parsing failed",
             f"Failed to parse file URL: {doc.file_url}",
@@ -44,7 +50,7 @@ def on_update(doc, method):
 
     prev_url = doc.file_url
     # Generate a placeholder URL for the file while it is being moved
-    frappe.db.set_value("File", doc.name, "file_url", blob_store.get_private_file_link("in-transit"))
+    frappe.db.set_value("File", doc.name, "file_url", blob_store.get_file_link("in-transit"))
 
     frappe.enqueue(
         change_file_privacy,
@@ -67,12 +73,19 @@ def on_trash(doc, method):
         return
 
     blob_store = BlobStore()
-    blob_details = blob_store.parse_url(doc.file_url)
-    if not blob_details:
+
+    if blob_store.is_ignored_dtype(doc.attached_to_doctype):
+        return
+
+    blob_name = blob_store.parse_url(doc.file_url)
+    if not blob_name:
         generate_error_log(
             "File URL parsing failed",
             f"Failed to parse file URL: {doc.file_url}",
             exception=frappe.get_traceback(),
         )
         raise frappe.ValidationError(f"Cannot delete file {doc.file_url}: Invalid file URL.")
-    blob_store.delete_blob(container_name=blob_details.container_name, blob_name=blob_details.blob_name)
+    container_name = (
+        blob_store.get_private_container_name() if doc.is_private else blob_store.get_public_container_name()
+    )
+    blob_store.delete_blob(container_name=container_name, blob_name=blob_name)

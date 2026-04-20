@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import time
@@ -7,6 +8,8 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import frappe
 import magic
+
+logging.getLogger("azure").setLevel(logging.WARNING)
 from azure.core.exceptions import AzureError, ResourceExistsError
 from azure.storage.blob import (
     BlobSasPermissions,
@@ -45,25 +48,24 @@ class BlobStore:
         self.blob_service_client = blob_service_client or self._get_blob_service_client()
 
         # Ensure appropriate containers
-        self._ensure_container_exists(self.get_public_container_name(), is_public=True)
-        self._ensure_container_exists(self.get_private_container_name(), is_public=False)
+        self._ensure_container_exists(self.get_public_container_name())
+        self._ensure_container_exists(self.get_private_container_name())
 
     def get_public_container_name(self) -> str:
         """
-        Returns the name of the public container.
+        Returns the name of the container where public files are stored.
         """
-        return f"{self.settings.default_container_name}-public"
+        return f"{self.settings.default_container_name}-frappe-public"
 
     def get_private_container_name(self) -> str:
         """
-        Returns the name of the private container.
+        Returns the name of the container where private files are stored.
         """
-        return f"{self.settings.default_container_name}-private"
+        return f"{self.settings.default_container_name}-frappe-private"
 
-    def _ensure_container_exists(self, container_name: str, is_public: bool = False):
+    def _ensure_container_exists(self, container_name: str):
         """
         Create a container if it doesn't exist.
-        Set public access if requested.
         """
         try:
             container_client = self.blob_service_client.get_container_client(container_name)
@@ -73,9 +75,6 @@ class BlobStore:
             except ResourceExistsError:
                 # This is expected if the container is already there.
                 pass
-
-            if is_public:
-                container_client.set_container_access_policy(signed_identifiers={}, public_access="blob")
 
         except Exception as e:
             generate_error_log(
@@ -88,18 +87,16 @@ class BlobStore:
     def generate_sas_url(
         self,
         blob_name: str,
-        container_name: str | None = None,
+        container_name: str,
         ignore_cache: bool = False,
     ) -> str:
         """
         Generates a temporary SAS URL to allow read access to a private blob.
 
-        :param container_name: The name of the private container.
+        :param container_name: The name of the container.
         :param blob_name: The name of the blob.
         :return: A full URL with a SAS token for temporary access.
         """
-        if container_name is None:
-            container_name = self.get_private_container_name()
 
         blob_client = self.blob_service_client.get_blob_client(container=container_name, blob=blob_name)
         cache_key = f"azure_blob_sas_url::{container_name}::{blob_name}"
@@ -185,12 +182,12 @@ class BlobStore:
         file_name = regex.sub("", file_name)
         return file_name
 
-    def blob_key_generator(self, file_name, parent_doctype=None, parent_name=None, is_private=True):
+    def blob_key_generator(self, file_name, parent_doctype=None, parent_name=None):
         """
-        Generate keys for s3 objects uploaded with file name attached.
+        Generate keys for blob objects uploaded with file name attached.
         """
         # Check for custom key generator hook
-        hook_cmd = frappe.get_hooks().get("s3_key_generator")
+        hook_cmd = frappe.get_hooks().get("blob_key_generator")
         if hook_cmd:
             try:
                 custom_key = frappe.get_attr(hook_cmd[0])(
@@ -209,19 +206,8 @@ class BlobStore:
 
         file_name = self.strip_special_chars(frappe.scrub(file_name))
         unique_key = frappe.generate_hash(length=8)
-        today = frappe.utils.now_datetime()
-        year, month, day = (
-            today.strftime("%Y"),
-            today.strftime("%m"),
-            today.strftime("%d"),
-        )
 
         path_parts = [
-            year,
-            month,
-            day,
-            parent_doctype,
-            parent_name,
             unique_key,
             file_name,
         ]
@@ -234,14 +220,19 @@ class BlobStore:
         file_key: str,
         file_path: str,
         file_content: bytes | None = None,
-        is_private: bool = True,
+        is_file_private: bool = True,
     ) -> str:
         """
         Uploads a file to Azure Blob Storage and returns the blob URL.
         """
         try:
+            if not self.settings.auto_upload_to_azure:
+                return file_path
+
             blob_client = self.blob_service_client.get_blob_client(
-                container=(self.get_public_container_name() if not is_private else self.get_private_container_name()),
+                container=(
+                    self.get_public_container_name() if not is_file_private else self.get_private_container_name()
+                ),
                 blob=file_key,
             )
 
@@ -249,7 +240,7 @@ class BlobStore:
             if file_content:
                 data_to_upload = file_content
             else:
-                with open(file_path, "rb") as f:
+                with open(file_path, "rb") as f:  # nosemgrep
                     data_to_upload = f.read()
 
             blob_client.upload_blob(
@@ -260,7 +251,7 @@ class BlobStore:
                     content_disposition=f"inline; filename={quote(os.path.basename(file_path))}",
                 ),
             )
-            return blob_client.url if not is_private else self.get_private_file_link(file_key)
+            return self.get_file_link(file_key)
         except AzureError as e:
             generate_error_log(
                 _("Azure Blob Upload Error"),
@@ -289,64 +280,45 @@ class BlobStore:
             raise e
 
     @classmethod
-    def get_private_file_link(cls, file_key: str) -> str:
+    def get_file_link(cls, file_key: str) -> str:
         """
         Returns a temporary link to a private file stored in Azure Blob Storage.
         """
         # NOTE: It is better to provide the entire URL to the API method since Frappe internally
         # checks if the URL starts with `http` and handles operations accordingly.
-        return f"{frappe.utils.get_url()}/api/method/frappe_azure_blob_storage.api.azure_blob.download_private_file?file_name={quote(file_key)}"
+        return f"{frappe.utils.get_url()}/api/method/frappe_azure_blob_storage.api.azure_blob.download_file?file_name={file_key}"
 
     @classmethod
     def is_local_file(cls, file_url: str) -> bool:
         return file_url.startswith(("/files/", "/private/files/"))
 
-    def parse_url(self, file_url: str) -> frappe._dict | None:
+    def is_ignored_dtype(self, doctype: str) -> bool:
+        ignored_dtypes = self.settings.ignored_doctypes or []
+        ignored_dtypes = [dtype._doctype.strip() for dtype in ignored_dtypes if dtype._doctype.strip()]
+        return doctype in ignored_dtypes
+
+    def parse_url(self, file_url: str) -> str | None:
         """
-        Parses a Frappe/Azure file URL to extract its components.
+        Parses a Frappe/Azure file URL to extract the blob name.
 
         Args:
-            file_url: The URL of the file, which can be a private proxy URL
-                    or a direct public Azure Blob Storage URL.
+            file_url: The URL of the file (proxy /api/method/ format).
 
         Returns:
-            A dict containing (container_name, blob_name, is_private).
-            Returns None if the URL format is not recognized.
+            The blob name string, or None if the URL format is not recognized.
         """
         if not file_url:
             return None
 
         parsed_url = urlparse(file_url)
 
-        # --- Handle Private Proxy URLs ---
-        # e.g., /api/method/...?file_name=container/path/to/blob.pdf
         if "/api/method/" in parsed_url.path:
             query_params = parse_qs(parsed_url.query)
             blob_name = query_params.get("file_name", [None])[0]
 
             if blob_name:
-                return frappe._dict(
-                    container_name=self.get_private_container_name(),
-                    blob_name=blob_name,
-                    is_private=True,
-                )
+                return blob_name
 
-        # --- Handle Public Direct Azure URLs ---
-        # e.g., https://account.blob.core.windows.net/container/path/to/blob.pdf
-        elif self.settings.endpoint_suffix in parsed_url.netloc:
-            # Path will be like /container_name/path/to/blob.pdf
-            path_parts = parsed_url.path.strip("/").split("/")
-            if path_parts:
-                container_name = path_parts[0]
-                # The rest of the path is the blob name
-                blob_name = "/".join(path_parts[1:])
-                return frappe._dict(
-                    container_name=container_name,
-                    blob_name=blob_name,
-                    is_private=False,
-                )
-
-        # If neither format matches
         return None
 
 
@@ -359,13 +331,15 @@ def change_file_privacy(
     Moves a blob from one location to another within Azure Blob Storage.
     """
     file_doc = frappe.get_doc("File", file_id)
+    if not file_doc.custom_uploaded_to_azure:
+        return
     try:
         blob_store = BlobStore()
         private_container = blob_store.get_private_container_name()
         public_container = blob_store.get_public_container_name()
 
-        blob_details = blob_store.parse_url(prev_url)
-        if not blob_details:
+        blob_name = blob_store.parse_url(prev_url)
+        if not blob_name:
             generate_error_log(
                 "File URL parsing failed",
                 f"Failed to parse file URL: {prev_url}",
@@ -374,7 +348,7 @@ def change_file_privacy(
             raise frappe.ValidationError(f"Cannot change privacy for file {prev_url}: Invalid file URL.")
 
         # keep the name same for both source and destination
-        source_blob_key = destination_blob_key = blob_details.blob_name
+        source_blob_key = destination_blob_key = blob_name
 
         if to_private:
             src_container, dest_container = public_container, private_container
@@ -418,10 +392,7 @@ def change_file_privacy(
 
         # Remove the cached SAS URL for the source blob
         frappe.cache().delete_value(f"azure_blob_sas_url::{src_container}::{source_blob_key}")
-        file_doc.set(
-            "file_url",
-            (destination_client.url if not to_private else blob_store.get_private_file_link(destination_blob_key)),
-        )
+        file_doc.set("file_url", blob_store.get_file_link(destination_blob_key))
         file_doc.is_private = to_private
         file_doc.save()
     except Exception as e:
@@ -448,7 +419,7 @@ def upload_local_file(
     file_doc: File | None = None,
     file_id: str | None = None,
     remove_original: bool | None = None,
-) -> None:
+) -> File | None:
     """
     Uploads an existing file to Azure Blob Storage.
 
@@ -465,10 +436,16 @@ def upload_local_file(
         if file_id is not None:
             file_doc = frappe.get_doc("File", file_id)
 
+        if (
+            file_doc.custom_uploaded_to_azure
+            or blob_store.is_ignored_dtype(file_doc.attached_to_doctype)
+            or not blob_store.settings.auto_upload_to_azure
+        ):
+            return file_doc
+
         file_name = file_doc.file_name
         parent_doctype = file_doc.attached_to_doctype
         parent_name = file_doc.attached_to_name
-        is_private = file_doc.is_private
         file_url = file_doc.file_url
 
         if not file_url:
@@ -478,14 +455,14 @@ def upload_local_file(
                 throw_exc=True,
             )
 
-        file_blob_key = blob_store.blob_key_generator(file_name, parent_doctype, parent_name, is_private)
+        file_blob_key = blob_store.blob_key_generator(file_name, parent_doctype, parent_name)
         full_file_path = get_file_path(file_id if file_id else file_doc.file_url)
 
         blob_url = blob_store.upload_blob(
             file_key=file_blob_key,
             file_content=file_doc.get_content() if file_doc else None,
             file_path=full_file_path,
-            is_private=is_private,
+            is_file_private=file_doc.is_private if file_doc else True,
         )
         if remove_original or (remove_original is None and blob_store.settings.remove_original_files == 1):
             if file_id:

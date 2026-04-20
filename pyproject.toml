@@ -4,13 +4,13 @@ authors = [
     { name = "rtCamp", email = "frappe@rtcamp.com"}
 ]
 description = "Blob Storage support for Azure"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
-    "azure-storage-blob~=12.26.0",
-    "azure-identity~=1.23.1",
+    "azure-storage-blob~=12.28.0",
+    "azure-identity~=1.25.1",
     "python-magic~=0.4.27",
 ]
 
@@ -18,13 +18,15 @@ dependencies = [
 requires = ["flit_core >=3.4,<4"]
 build-backend = "flit_core.buildapi"
 
+[tool.bench.frappe-dependencies]
+frappe = ">=16.0.0,<17.0.0"
 # These dependencies are only installed when developer mode is enabled
 [tool.bench.dev-dependencies]
 # package_name = "~=1.1.0"
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py314"
 exclude = [
     "**/doctype/*/boilerplate/*.py", # boilerplate are template strings, not valid python
 ]
