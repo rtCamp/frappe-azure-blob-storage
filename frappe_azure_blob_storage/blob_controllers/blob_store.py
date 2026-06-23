@@ -10,7 +10,7 @@ import frappe
 import magic
 
 logging.getLogger("azure").setLevel(logging.WARNING)
-from azure.core.exceptions import AzureError, ResourceExistsError
+from azure.core.exceptions import AzureError, ResourceExistsError, ResourceNotFoundError
 from azure.storage.blob import (
     BlobSasPermissions,
     BlobServiceClient,
@@ -44,11 +44,25 @@ class BlobStore:
         Initializes the BlobServiceClient by fetching credentials from
         the 'Azure Storage Settings' Doctype.
 
-        Container existence is verified lazily on the first write-path call for
-        a given container (see ``_ensure_container_exists``). This avoids two
-        unconditional Azure REST round-trips on every ``BlobStore()``
-        instantiation, including on read-only paths that do not require
-        create-rights on the container.
+        Container existence is no longer verified at construction time.
+        Write paths that create or copy blobs (``upload_blob``,
+        ``change_file_privacy``) call ``_ensure_container_exists`` before
+        the write, memoized per instance, so create-rights are only
+        exercised when actually needed. Read paths (SAS URL generation,
+        ``parse_url``) and the best-effort ``delete_blob`` do not call
+        ``_ensure_container_exists`` and will not auto-create a missing
+        container — ``delete_blob`` swallows ``ResourceNotFoundError`` to
+        preserve the prior "missing container is a no-op delete"
+        behavior that used to be a side effect of the eager ensure in
+        ``__init__``.
+
+        This avoids two unconditional Azure REST round-trips on every
+        ``BlobStore()`` instantiation (one per container), which was
+        load-bearing on read-heavy workloads where most call sites never
+        touch a write path at all. On a production-scale workload, APM
+        Span data showed roughly ``avg_ext_calls ≈ 2.0`` per
+        ``BlobStore()`` instantiation against the container-create
+        endpoint, all of which become avoidable with this change.
         """
         self.settings = frappe.get_single("Azure Storage Settings")
         self.blob_service_client = blob_service_client or self._get_blob_service_client()
@@ -285,6 +299,19 @@ class BlobStore:
         """
         Deletes a specific blob from a given container in Azure.
 
+        Best-effort delete: a missing blob is already a no-op on the
+        Azure SDK side, and a missing container is treated as a no-op
+        here (swallowed ``ResourceNotFoundError``). This matches the
+        behavior that previously came "for free" from the eager
+        container-ensure in ``__init__``: if a container had been
+        deleted out-of-band, the next ``BlobStore()`` would recreate
+        it and the subsequent ``delete_blob()`` would then succeed as
+        a no-op against an empty container. With the lazy-ensure
+        change, ``delete_blob`` no longer goes through
+        ``_ensure_container_exists`` (we don't want a deletion path to
+        also create-rights), so we explicitly absorb the
+        container-missing case here instead.
+
         :param container_name: The name of the container holding the blob.
         :param blob_name: The name of the blob to delete.
         """
@@ -292,6 +319,10 @@ class BlobStore:
             blob_client = self.blob_service_client.get_blob_client(container=container_name, blob=blob_name)
             # delete_blob() will not raise an error if the blob doesn't exist.
             blob_client.delete_blob()
+        except ResourceNotFoundError:
+            # Container itself is missing — treat as best-effort no-op,
+            # consistent with prior eager-ensure-recreate behavior.
+            return
         except Exception as e:
             generate_error_log(
                 "Azure Blob Deletion Error",
