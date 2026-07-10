@@ -65,7 +65,7 @@ def invalidate_from_file_url(file_url: str) -> None:
     `BlobStore`) because this runs from doc-event hooks on every File save
     and `BlobStore.__init__` loads `Azure Storage Settings` from the DB.
     """
-    blob_key = _parse_blob_key_from_url(file_url)
+    blob_key = parse_blob_key_from_url(file_url)
     if blob_key:
         invalidate_cached_file_name(blob_key)
 
@@ -73,17 +73,34 @@ def invalidate_from_file_url(file_url: str) -> None:
 _DOWNLOAD_FILE_METHOD_PATH = "/api/method/frappe_azure_blob_storage.api.azure_blob.download_file"
 
 
-def _parse_blob_key_from_url(file_url: str) -> str | None:
+def parse_blob_key_from_url(file_url: str) -> str | None:
     """
     Extract the `file_name` query parameter from our proxy URL. Returns
     None for local URLs, other whitelisted endpoints, or anything
-    unparseable — matching only the exact `download_file` path avoids
-    false positives if another `/api/method/...` endpoint on the same
-    site ever surfaces in a File.file_url.
+    unparseable.
+
+    Path matching is done with `endswith` (rather than a substring `in`
+    test) so a hypothetical future endpoint whose path merely CONTAINS
+    `.download_file` — e.g. `download_file_v2` or a mounted sub-path —
+    is not accepted. Frappe method URLs never have a suffix past the
+    method name, so an exact-tail match is the right primitive.
+
+    NOTE: `parse_qs` decodes URL-encoded values, so a `file_name` query
+    param containing `%20` etc. is decoded correctly. Blob keys emitted
+    by the default `BlobStore.blob_key_generator` are already scrubbed
+    to `[0-9a-zA-Z._-]` and cannot contain characters that would need
+    URL-encoding — but a custom `blob_key_generator` hook that emits
+    URL-encoded characters will round-trip cleanly through this helper.
     """
     if not file_url:
         return None
     parsed = urlparse(file_url)
-    if _DOWNLOAD_FILE_METHOD_PATH not in parsed.path:
+    if not parsed.path.endswith(_DOWNLOAD_FILE_METHOD_PATH):
         return None
     return parse_qs(parsed.query).get("file_name", [None])[0]
+
+
+# Back-compat alias for the previous underscored name. Kept so external
+# callers (and older tests) don't break, but new code should import the
+# public name above.
+_parse_blob_key_from_url = parse_blob_key_from_url

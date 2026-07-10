@@ -12,6 +12,7 @@ from frappe_azure_blob_storage.utils.cache import (
     get_cached_file_name,
     invalidate_cached_file_name,
     invalidate_from_file_url,
+    parse_blob_key_from_url,
     set_cached_file_name,
 )
 
@@ -99,3 +100,36 @@ class TestDownloadFileCache(FrappeTestCase):
             "?file_name=abcd1234/report.pdf"
         )
         self.assertIsNone(_parse_blob_key_from_url(url))
+
+    def test_parse_blob_key_uses_endswith_not_substring(self):
+        """
+        The path check is `endswith`, not `in`. A future endpoint whose
+        path merely contains `.download_file` (e.g. `download_file_v2`,
+        or a nested mount) must not be treated as the download_file
+        proxy endpoint. This guards the (small but real) risk of a
+        substring-based match accepting an unrelated method URL and
+        extracting a random `file_name` from it.
+        """
+        # `download_file_v2` — path CONTAINS the download_file suffix
+        # only if the base path ends there; here it clearly does not.
+        v2_url = (
+            "https://example.com/api/method/frappe_azure_blob_storage.api.azure_blob.download_file_v2"
+            "?file_name=abcd1234/report.pdf"
+        )
+        self.assertIsNone(parse_blob_key_from_url(v2_url))
+
+        # Nested path where download_file appears as a mid-segment.
+        nested_url = (
+            "https://example.com/api/method/frappe_azure_blob_storage.api.azure_blob.download_file/extra"
+            "?file_name=abcd1234/report.pdf"
+        )
+        self.assertIsNone(parse_blob_key_from_url(nested_url))
+
+    def test_public_and_underscored_names_are_the_same_helper(self):
+        """
+        `_parse_blob_key_from_url` is kept as a back-compat alias for
+        `parse_blob_key_from_url`. Guard against a future refactor that
+        drops the alias silently by asserting they refer to the same
+        callable.
+        """
+        self.assertIs(_parse_blob_key_from_url, parse_blob_key_from_url)

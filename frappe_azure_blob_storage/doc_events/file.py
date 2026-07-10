@@ -74,6 +74,17 @@ def on_update(doc, method):
     invalidate_from_file_url(prev_url)
     # Generate a placeholder URL for the file while it is being moved
     frappe.db.set_value("File", doc.name, "file_url", blob_store.get_file_link("in-transit"))
+    # Race-window closer: a concurrent `download_file` for `prev_url` may
+    # have landed between the invalidate above and the `set_value` write
+    # — it would have re-queried the DB (still pointing at prev_url at
+    # that instant), succeeded, and repopulated the stale mapping.
+    # Invalidating again immediately after the raw write shrinks the
+    # window to zero: any entry populated during the race is dropped
+    # once the write commits. `change_file_privacy` on the ORM path
+    # will fire `on_update` again anyway when the real post-flip URL is
+    # saved, but we shouldn't rely on that to clean up a race window we
+    # can close cheaply here.
+    invalidate_from_file_url(prev_url)
 
     frappe.enqueue(
         change_file_privacy,
@@ -90,9 +101,19 @@ def on_update(doc, method):
 def after_rename(doc, method, old_name, new_name, merge):
     """
     Event handler for the 'after_rename' event of the File document.
-    A rename changes `File.name`, which is the value our download_file cache
-    stores against a blob key — invalidate so the next lookup repopulates
-    with the new docname.
+
+    A rename changes `File.name` (the docname) — which is the VALUE our
+    download_file cache stores against a blob KEY. The blob key itself
+    is derived from `file_url`, which a rename does NOT change, so the
+    entry to drop is the one keyed on `doc.file_url` (the same before
+    and after the rename). Invalidating it forces the next lookup to
+    repopulate with the fresh (renamed) docname.
+
+    If a rename ever simultaneously changes `file_url` (Frappe permits
+    content-hash-based renames in some flows), the on_update handler's
+    top-level `has_value_changed("file_url")` block will run first and
+    invalidate BOTH the pre- and post-rename URLs via
+    `get_doc_before_save`, so no stale entry survives.
     """
     invalidate_from_file_url(doc.file_url)
 

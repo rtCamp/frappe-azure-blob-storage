@@ -21,6 +21,7 @@ from frappe import _
 from frappe.core.doctype.file.file import File
 from frappe.utils.file_manager import get_file_path
 
+from frappe_azure_blob_storage.utils.cache import invalidate_from_file_url
 from frappe_azure_blob_storage.utils.error import generate_error_log
 
 
@@ -406,6 +407,26 @@ def change_file_privacy(
         )
         # Rollback the transaction to ensure the file URL is not updated
         frappe.db.commit()
+
+        # The raw `db.set_value` above bypasses doc events, so the
+        # `download_file` blob-key -> File.name cache would otherwise
+        # keep a stale entry pointing at the transient "in-transit" URL
+        # (populated during the outage window by any request that hit
+        # this file) until its TTL expired. Explicitly invalidate both
+        # the transient in-transit URL AND the restored prev_url so
+        # neither can serve a stale docname after rollback. Guarded
+        # broadly because invalidation must never mask the original
+        # failure that landed us in this except block.
+        try:
+            # `blob_store` may not be bound if `BlobStore()` itself raised
+            # on entry to the try. Re-instantiate defensively — the
+            # constructor only reads Azure Storage Settings, no I/O.
+            _bs = BlobStore()
+            invalidate_from_file_url(_bs.get_file_link("in-transit"))
+            if prev_url:
+                invalidate_from_file_url(prev_url)
+        except Exception:  # noqa: BLE001
+            pass
 
         generate_error_log(
             _("Azure Blob Move Error"),

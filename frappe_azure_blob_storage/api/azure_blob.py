@@ -5,6 +5,7 @@ from frappe_azure_blob_storage.blob_controllers.blob_store import BlobStore, upl
 from frappe_azure_blob_storage.utils.cache import (
     get_cached_file_name,
     invalidate_cached_file_name,
+    parse_blob_key_from_url,
     set_cached_file_name,
 )
 from frappe_azure_blob_storage.utils.error import generate_error_log
@@ -162,6 +163,23 @@ def _run_migrate_job(files_list: list | None = None, is_web_request: bool = True
             print(f"\nERROR: Migration failed. Check Error Log for details.\n{frappe.get_traceback()}")
 
 
+def _resolve_and_cache_file_doc(file_name: str) -> "frappe.model.document.Document":
+    """
+    Resolve a blob key to a fully-loaded `File` document via a single
+    `db.get_value` + `get_doc`, populating the blob-key -> docname cache
+    on the way. Raises `frappe.DoesNotExistError` if no row matches.
+
+    Shared by both the cache-miss path and the stale-guard re-resolution
+    path in `download_file` so the two branches stay in lockstep.
+    """
+    file_url = BlobStore.get_file_link(file_name)
+    docname = frappe.db.get_value("File", {"file_url": file_url}, "name")
+    if not docname:
+        raise frappe.DoesNotExistError
+    set_cached_file_name(file_name, docname)
+    return frappe.get_doc("File", docname)
+
+
 @frappe.whitelist(methods=["GET"], allow_guest=True)  # nosemgrep
 def download_file(file_name: str):
     from frappe.utils.response import download_private_file
@@ -176,9 +194,13 @@ def download_file(file_name: str):
         if "?fid=" in file_name:
             file_name = file_name.split("?fid=")[0]
 
-        # Normalize whitespace so a client sending a stray trailing space
-        # doesn't diverge from the DB row that MySQL collation would still
-        # match, keeping cache key stability tight.
+        # Defensive hardening against malformed clients that append a
+        # stray leading/trailing space. Blob keys emitted by the default
+        # `BlobStore.blob_key_generator` are scrubbed to `[0-9a-zA-Z._-]`
+        # and cannot legitimately contain whitespace, so this strip is
+        # safe. A custom `blob_key_generator` hook that emits whitespace
+        # would collide with the DB row anyway (MySQL trailing-space
+        # collation), so normalizing here matches DB semantics.
         file_name = file_name.strip()
 
         # 1. Resolve the File docname.
@@ -192,36 +214,35 @@ def download_file(file_name: str):
         # we do a single `db.get_value` (previous code did `db.exists` then
         # `get_doc`, i.e. two round-trips) and populate the cache.
         docname = get_cached_file_name(file_name)
+        # `docname is None` is treated as a miss because `set_cached_file_name`
+        # refuses to store None/empty (see utils/cache.py) — so a None here
+        # cannot mean "a legitimate cached None"; it can only be a Redis miss.
+        # If a future refactor ever caches None, this branch will need to
+        # distinguish miss-vs-cached-None (e.g. via a sentinel).
         if docname is None:
-            file_url = BlobStore.get_file_link(file_name)
-            docname = frappe.db.get_value("File", {"file_url": file_url}, "name")
-            if not docname:
-                raise frappe.DoesNotExistError
-            set_cached_file_name(file_name, docname)
+            file_doc = _resolve_and_cache_file_doc(file_name)
+        else:
+            try:
+                file_doc = frappe.get_doc("File", docname)
+            except frappe.DoesNotExistError:
+                # The cached docname points at a row that no longer exists
+                # (e.g. deleted between cache write and this request).
+                # Drop the stale entry and let the client retry.
+                invalidate_cached_file_name(file_name)
+                raise
 
-        try:
-            file_doc = frappe.get_doc("File", docname)
-        except frappe.DoesNotExistError:
-            # The cached docname points at a row that no longer exists (e.g.
-            # deleted between cache write and this request). Drop the stale
-            # entry and let the client retry.
-            invalidate_cached_file_name(file_name)
-            raise
-
-        # Guard against a stale cache entry where the docname still exists
-        # but its file_url has been mutated out-of-band (data migration,
-        # bulk-rename tool that bypasses doc events, etc.). Our hooks cover
-        # the ORM paths, but Redis is a cache, not a source of truth — a
-        # cheap membership check here re-resolves via the DB rather than
-        # returning a SAS URL for the wrong blob.
-        if file_name not in (file_doc.file_url or ""):
-            invalidate_cached_file_name(file_name)
-            file_url = BlobStore.get_file_link(file_name)
-            docname = frappe.db.get_value("File", {"file_url": file_url}, "name")
-            if not docname:
-                raise frappe.DoesNotExistError
-            set_cached_file_name(file_name, docname)
-            file_doc = frappe.get_doc("File", docname)
+            # Guard against a stale cache entry where the docname still
+            # exists but its file_url has been mutated out-of-band (data
+            # migration, bulk-rename tool that bypasses doc events, etc.).
+            # Our hooks cover the ORM paths, but Redis is a cache, not a
+            # source of truth — parsing the blob key out of the doc's
+            # file_url and comparing for EXACT equality (rather than a
+            # substring `in` test) makes this guard prefix-safe: two blob
+            # keys sharing a prefix, or a filename that happens to be a
+            # substring of an unrelated URL, will no longer pass through.
+            if parse_blob_key_from_url(file_doc.file_url or "") != file_name:
+                invalidate_cached_file_name(file_name)
+                file_doc = _resolve_and_cache_file_doc(file_name)
 
         # 3. If file is local let frappe handle it.
         if BlobStore.is_local_file(file_doc.file_url):
