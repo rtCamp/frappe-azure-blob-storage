@@ -408,23 +408,11 @@ def change_file_privacy(
         # Rollback the transaction to ensure the file URL is not updated
         frappe.db.commit()
 
-        # The raw `db.set_value` above bypasses doc events, so the
-        # `download_file` blob-key -> File.name cache would otherwise
-        # keep a stale entry pointing at the transient "in-transit" URL
-        # (populated during the outage window by any request that hit
-        # this file) until its TTL expired. Explicitly invalidate both
-        # the transient in-transit URL AND the restored prev_url so
-        # neither can serve a stale docname after rollback. Guarded
-        # broadly because invalidation must never mask the original
-        # failure that landed us in this except block.
+        # set_value above bypassed doc events; drop cache entries for the
+        # transient in-transit URL and the restored prev_url so neither
+        # serves a stale docname. Broad guard so invalidation cannot mask
+        # the original failure.
         try:
-            # `get_file_link` is a `@classmethod` — no instance needed,
-            # no I/O, no DB read for Azure Storage Settings. Calling it
-            # on the class also avoids re-instantiating `BlobStore` in
-            # a rollback path that may already be handling an Azure API
-            # failure (the constructor calls `_ensure_container_exists`
-            # on both containers, which issues Azure calls — the last
-            # thing we want on an error-recovery branch).
             invalidate_from_file_url(BlobStore.get_file_link("in-transit"))
             if prev_url:
                 invalidate_from_file_url(prev_url)

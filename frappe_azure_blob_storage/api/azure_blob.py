@@ -164,21 +164,9 @@ def _run_migrate_job(files_list: list | None = None, is_web_request: bool = True
 
 
 def _resolve_and_cache_file_doc(file_name: str) -> "frappe.model.document.Document":
-    """
-    Resolve a blob key to a fully-loaded `File` document via a single
-    `db.get_value` + `get_doc`, populating the blob-key -> docname cache
-    on the way. Raises `frappe.DoesNotExistError` if no row matches.
-
-    Shared by both the cache-miss path and the stale-guard re-resolution
-    path in `download_file` so the two branches stay in lockstep.
-
-    Cache write is deferred until AFTER `get_doc` returns successfully:
-    a get_doc failure between the `db.get_value` and the load (row
-    deleted mid-flight, child-table load error, permission surface, etc.)
-    must not leave a docname in the cache that can't actually be loaded.
-    The `download_file` DoesNotExistError branch self-heals eventually,
-    but we don't want concurrent readers piling onto a poisoned entry.
-    """
+    # Cache write is deferred until AFTER get_doc succeeds so a failed load
+    # (row deleted mid-flight, permission surface, etc.) never leaves a
+    # docname in the cache that can't actually be loaded.
     file_url = BlobStore.get_file_link(file_name)
     docname = frappe.db.get_value("File", {"file_url": file_url}, "name")
     if not docname:
@@ -197,69 +185,37 @@ def download_file(file_name: str):
     It checks file permissions and then redirects to a temporary SAS URL.
     """
     try:
-        # --- Strip the ?fid=... query parameter ---
-        # This ensures we get the clean file path from the URL.
         if "?fid=" in file_name:
             file_name = file_name.split("?fid=")[0]
 
-        # Defensive hardening against malformed clients that append a
-        # stray leading/trailing space. Blob keys emitted by the default
-        # `BlobStore.blob_key_generator` are scrubbed to `[0-9a-zA-Z._-]`
-        # and cannot legitimately contain whitespace, so this strip is
-        # safe. A custom `blob_key_generator` hook that emits whitespace
-        # would collide with the DB row anyway (MySQL trailing-space
-        # collation), so normalizing here matches DB semantics.
+        # Strip trailing whitespace — MySQL trailing-space collation would
+        # equate "foo " and "foo" on the file_url lookup, so normalize here
+        # to keep the cache key aligned with DB row equality.
         file_name = file_name.strip()
 
-        # 1. Resolve the File docname.
-        #
-        # High-traffic downloads make this lookup the hot path. The core
-        # `file_url_index` on `tabFile.file_url` is a prefix index on the
-        # first 100 chars, and every proxy URL we mint shares a long common
-        # prefix — so the index has near-zero selectivity and MySQL scans.
-        #
-        # We cache the resolved `File.name` per blob key in Redis; on a miss
-        # we do a single `db.get_value` (previous code did `db.exists` then
-        # `get_doc`, i.e. two round-trips) and populate the cache.
         docname = get_cached_file_name(file_name)
-        # `docname is None` is treated as a miss because `set_cached_file_name`
-        # refuses to store None/empty (see utils/cache.py) — so a None here
-        # cannot mean "a legitimate cached None"; it can only be a Redis miss.
-        # If a future refactor ever caches None, this branch will need to
-        # distinguish miss-vs-cached-None (e.g. via a sentinel).
         if docname is None:
             file_doc = _resolve_and_cache_file_doc(file_name)
         else:
             try:
                 file_doc = frappe.get_doc("File", docname)
             except frappe.DoesNotExistError:
-                # The cached docname points at a row that no longer exists
-                # (e.g. deleted between cache write and this request).
-                # Drop the stale entry and let the client retry.
                 invalidate_cached_file_name(file_name)
                 raise
 
-            # Guard against a stale cache entry where the docname still
-            # exists but its file_url has been mutated out-of-band (data
-            # migration, bulk-rename tool that bypasses doc events, etc.).
-            # Our hooks cover the ORM paths, but Redis is a cache, not a
-            # source of truth — parsing the blob key out of the doc's
-            # file_url and comparing for EXACT equality (rather than a
-            # substring `in` test) makes this guard prefix-safe: two blob
-            # keys sharing a prefix, or a filename that happens to be a
-            # substring of an unrelated URL, will no longer pass through.
+            # Guard against out-of-band file_url mutation (raw SQL migrations,
+            # bulk-rename tools that bypass doc events). Exact equality — not
+            # substring — so two blob keys sharing a prefix cannot pass through.
             if parse_blob_key_from_url(file_doc.file_url or "") != file_name:
                 invalidate_cached_file_name(file_name)
                 file_doc = _resolve_and_cache_file_doc(file_name)
 
-        # 3. If file is local let frappe handle it.
         if BlobStore.is_local_file(file_doc.file_url):
             return download_private_file(file_doc.file_url)
 
         if not file_doc.is_downloadable():
             raise frappe.PermissionError
 
-        # 4. Generate the SAS URL
         blob_store = BlobStore()
 
         if file_doc.is_private:
@@ -267,10 +223,8 @@ def download_file(file_name: str):
         else:
             container_name = blob_store.get_public_container_name()
 
-        # The blob_name is the cleaned file_name from the start of the function
         sas_url = blob_store.generate_sas_url(blob_name=file_name, container_name=container_name)
 
-        # 5. Redirect the user to the temporary URL
         frappe.local.response["type"] = "redirect"
         frappe.local.response["location"] = sas_url
 

@@ -10,16 +10,6 @@ from frappe_azure_blob_storage.utils.cache import _build_cache_key
 
 
 class TestDownloadFileCacheWiring(FrappeTestCase):
-    """
-    Integration-style tests that drive `download_file` through the
-    miss -> hit -> stale-docname -> stale-file_url paths and assert the
-    DB / cache calls are what we expect.
-
-    These complement the unit tests in `utils/test_cache.py` (which cover
-    the cache helper in isolation) by pinning down the actual wiring in
-    `api.azure_blob.download_file`.
-    """
-
     BLOB_KEY = "abcd1234/report.pdf"
     DOCNAME = "FILE-0001"
     PROXY_URL = (
@@ -41,7 +31,6 @@ class TestDownloadFileCacheWiring(FrappeTestCase):
         get_doc_mock,
         blob_store_mock,
     ):
-        """Wire up the standard set of patches for a single call."""
         return (
             patch("frappe_azure_blob_storage.api.azure_blob.frappe.cache", return_value=cache_mock),
             patch("frappe_azure_blob_storage.utils.cache.frappe.cache", return_value=cache_mock),
@@ -51,14 +40,9 @@ class TestDownloadFileCacheWiring(FrappeTestCase):
         )
 
     def test_second_call_serves_from_cache_and_skips_db(self):
-        """
-        First call is a miss: we `db.get_value` once and populate cache.
-        Second call is a hit: we do NOT hit `db.get_value` again.
-        """
         from frappe_azure_blob_storage.api import azure_blob
 
         cache = MagicMock()
-        # Simulate a live cache: miss then hit.
         cache_state = {}
 
         def _get(key):
@@ -88,24 +72,11 @@ class TestDownloadFileCacheWiring(FrappeTestCase):
             azure_blob.download_file(self.BLOB_KEY)
             azure_blob.download_file(self.BLOB_KEY)
 
-        # First call misses, second hits the cache -> only ONE DB lookup.
         self.assertEqual(get_value.call_count, 1)
-        # Pin down the exact cache wiring so a future refactor that
-        # accidentally short-circuits either the read or the write path
-        # gets caught here (call-count assertions catch broken caches
-        # that the DB-count assertion above cannot).
-        self.assertEqual(cache.get_value.call_count, 2)  # miss + hit
-        self.assertEqual(cache.set_value.call_count, 1)  # populated once, on the miss
+        self.assertEqual(cache.get_value.call_count, 2)
+        self.assertEqual(cache.set_value.call_count, 1)
 
     def test_fid_variants_share_cache_entry(self):
-        """
-        `download_file` strips `?fid=<n>` off the incoming `file_name`
-        BEFORE cache lookup, so two calls with different `fid` values
-        must resolve to the same cache entry and issue only ONE DB
-        lookup. The perf win is contingent on this — a client that
-        appends a rotating `fid` per request would otherwise defeat the
-        cache entirely.
-        """
         from frappe_azure_blob_storage.api import azure_blob
 
         cache = MagicMock()
@@ -128,25 +99,16 @@ class TestDownloadFileCacheWiring(FrappeTestCase):
             azure_blob.download_file(f"{self.BLOB_KEY}?fid=req-A")
             azure_blob.download_file(f"{self.BLOB_KEY}?fid=req-B")
 
-        # Only one DB lookup across two fid variants -> the ?fid strip
-        # runs before the cache key is built, so both calls share the
-        # entry keyed on the stripped blob key.
         self.assertEqual(get_value.call_count, 1)
         self.assertEqual(cache.set_value.call_count, 1)
-        # The single cache-set must be against the stripped key.
         set_key = cache.set_value.call_args_list[0].args[0]
         self.assertEqual(set_key, _build_cache_key(self.BLOB_KEY))
 
     def test_stale_docname_invalidates_cache_and_reraises(self):
-        """
-        If the cached docname points at a row that no longer exists,
-        `download_file` must drop the cache entry and re-raise
-        DoesNotExistError so the client sees a clean 404.
-        """
         from frappe_azure_blob_storage.api import azure_blob
 
         cache = MagicMock()
-        cache.get_value.return_value = self.DOCNAME  # cache hit
+        cache.get_value.return_value = self.DOCNAME
 
         get_value = MagicMock()
         get_doc = MagicMock(side_effect=frappe.DoesNotExistError)
@@ -158,30 +120,17 @@ class TestDownloadFileCacheWiring(FrappeTestCase):
             with self.assertRaises(frappe.DoesNotExistError):
                 azure_blob.download_file(self.BLOB_KEY)
 
-        # Pin the exact key deleted, so a future refactor introducing a
-        # spurious `delete_value` call elsewhere in `download_file`
-        # cannot slip past this test unnoticed.
         cache.delete_value.assert_called_once_with(_build_cache_key(self.BLOB_KEY))
 
     def test_stale_file_url_reresolves_via_db(self):
-        """
-        Cache hit -> docname loads fine -> but the doc's file_url no
-        longer contains the requested blob_key (out-of-band mutation).
-        Handler must invalidate, re-resolve via DB, refresh the cache,
-        and reload the doc.
-        """
         from frappe_azure_blob_storage.api import azure_blob
 
         cache = MagicMock()
-        cache.get_value.return_value = self.DOCNAME  # cache hit with wrong doc
+        cache.get_value.return_value = self.DOCNAME
 
-        # `stale_doc.file_url` deliberately points at an unrelated blob
-        # via a proxy URL (not a local /private/files/... path) so that
-        # `parse_blob_key_from_url` extracts a real key and the exact-
-        # equality guard has a meaningful mismatch to detect. A local
-        # URL would also trigger re-resolution (parses to None), but
-        # this variant exercises the pref-safe prefix issue that
-        # motivated switching from `in` to equality.
+        # stale_doc.file_url points at an unrelated proxy URL (not a
+        # /private/files/... path) so parse_blob_key_from_url returns a
+        # real key and the exact-equality guard has a meaningful mismatch.
         stale_doc = self._make_file_doc(
             file_url=(
                 "https://example.com/api/method/frappe_azure_blob_storage.api.azure_blob.download_file"
@@ -203,23 +152,12 @@ class TestDownloadFileCacheWiring(FrappeTestCase):
             frappe.local.response = {}
             azure_blob.download_file(self.BLOB_KEY)
 
-        # Stale entry deleted, re-resolved via DB, re-cached, doc reloaded.
-        # Pin the exact cache key so an unrelated future `delete_value`
-        # call cannot mask a real regression here.
         cache.delete_value.assert_called_once_with(_build_cache_key(self.BLOB_KEY))
         get_value.assert_called_once()
         self.assertEqual(get_doc.call_count, 2)
 
 
 class TestDownloadFileCacheEviction(FrappeTestCase):
-    """
-    Guard the cache-invalidation contract from the doctype event side:
-    a privacy flip on a File must invalidate the pre-flip proxy URL's
-    cache entry BEFORE the placeholder `in-transit` URL is written via
-    `frappe.db.set_value`, so a subsequent download_file for the old
-    blob key does not serve a stale docname.
-    """
-
     def test_privacy_flip_invalidates_previous_file_url_cache(self):
         from frappe_azure_blob_storage.doc_events import file as file_events
 
@@ -234,16 +172,13 @@ class TestDownloadFileCacheEviction(FrappeTestCase):
 
         doc = MagicMock()
         doc.name = "FILE-0001"
-        doc.file_url = prev_url  # before the placeholder rewrite
+        doc.file_url = prev_url
         doc.is_private = True
         doc.attached_to_doctype = None
         doc.flags = MagicMock()
         doc.flags.in_insert = False
-        # Real-world privacy flip: only `is_private` changed. `file_url`
-        # is still the pre-flip proxy URL and has_value_changed("file_url")
-        # is False — so the top-of-hook invalidator does NOT fire, and the
-        # belt-and-braces invalidate call before the raw SQL write is the
-        # only thing that drops the stale cache entry.
+        # Privacy-flip only: has_value_changed("file_url") is False, so the
+        # top-of-hook invalidator does not fire — only the pre-SQL invalidate.
         doc.has_value_changed.side_effect = lambda field: field == "is_private"
         doc.get_doc_before_save.return_value = None
 
@@ -267,29 +202,10 @@ class TestDownloadFileCacheEviction(FrappeTestCase):
 
             file_events.on_update(doc, method="on_update")
 
-        # Both the pre-flip URL and the (unchanged-so-far) doc.file_url
-        # get invalidated before the placeholder is written.
         invalidated_urls = [call.args[0] for call in invalidate.call_args_list]
         self.assertIn(prev_url, invalidated_urls)
 
     def test_privacy_flip_invalidates_prev_url_twice_to_shrink_race_window(self):
-        """
-        The invalidate-then-raw-SQL sequence has a race window: a
-        concurrent `download_file` for `prev_url` can land between the
-        invalidate and the write, re-query the DB (still pointing at
-        prev_url at that instant), and repopulate the stale mapping.
-        We SHRINK (not close) the window by invalidating a SECOND time
-        immediately after the raw write. This is a best-effort
-        mitigation: because `frappe.db.set_value` writes inside the
-        current transaction, the row change is not visible to concurrent
-        readers until the outer save commits — so a reader can still
-        land AFTER this second invalidate but BEFORE commit and
-        repopulate the stale mapping once more. The enqueued
-        `change_file_privacy` job re-saves the doc post-move and its
-        `on_update` (running post-commit) provides the final cleanup.
-        Test that the invalidation for `prev_url` fires at least twice
-        in the privacy-flip path.
-        """
         from frappe_azure_blob_storage.doc_events import file as file_events
 
         prev_url = (
@@ -332,23 +248,10 @@ class TestDownloadFileCacheEviction(FrappeTestCase):
             file_events.on_update(doc, method="on_update")
 
         invalidated_urls = [call.args[0] for call in invalidate.call_args_list]
-        # `prev_url` must be invalidated at least twice: once before the
-        # raw `set_value` write and once immediately after, to close the
-        # window during which a concurrent request could repopulate the
-        # stale mapping.
         self.assertGreaterEqual(invalidated_urls.count(prev_url), 2)
 
 
 class TestAfterRenameInvalidatesCache(FrappeTestCase):
-    """
-    A rename changes `File.name` (the docname) — which is the VALUE our
-    download_file cache stores against a blob KEY. The blob key itself
-    is derived from `file_url`, which a rename does NOT change, so the
-    `after_rename` hook must invalidate the entry keyed on
-    `doc.file_url` to force the next lookup to repopulate with the
-    fresh (renamed) docname.
-    """
-
     def test_after_rename_invalidates_cache_by_current_file_url(self):
         from frappe_azure_blob_storage.doc_events import file as file_events
 
@@ -377,14 +280,6 @@ class TestAfterRenameInvalidatesCache(FrappeTestCase):
 
 
 class TestDownloadFileWhitespaceStripping(FrappeTestCase):
-    """
-    `download_file` strips leading/trailing whitespace from the incoming
-    `file_name` BEFORE cache lookup, so a client that appends a stray
-    space cannot leak whitespace into the cache key. Cache semantics
-    then match the DB row (MySQL trailing-space collation would treat
-    `"foo "` and `"foo"` as equal on the file_url lookup anyway).
-    """
-
     BLOB_KEY = "abcd1234/report.pdf"
     DOCNAME = "FILE-0001"
     PROXY_URL = (
@@ -426,25 +321,16 @@ class TestDownloadFileWhitespaceStripping(FrappeTestCase):
             frappe.local.response = {}
             azure_blob.download_file(f"  {self.BLOB_KEY}  ")
 
-        # The single cache-set must be against the stripped key, with no
-        # whitespace leaking through.
         self.assertEqual(cache.set_value.call_count, 1)
         set_key = cache.set_value.call_args_list[0].args[0]
         self.assertEqual(set_key, _build_cache_key(self.BLOB_KEY))
 
     def test_whitespace_only_input_raises_does_not_exist_and_skips_cache_write(self):
-        """
-        A `file_name` that reduces to empty after strip must raise
-        DoesNotExistError WITHOUT writing anything to the cache — an
-        empty key is not a real blob key and must never occupy an entry.
-        """
         from frappe_azure_blob_storage.api import azure_blob
 
         cache = MagicMock()
-        cache.get_value.return_value = None  # miss for empty key
+        cache.get_value.return_value = None
 
-        # `db.get_value` will be called with an empty file_name-derived
-        # URL and returns None -> DoesNotExistError path.
         get_value = MagicMock(return_value=None)
         get_doc = MagicMock()
         blob_store = MagicMock()
@@ -464,24 +350,11 @@ class TestDownloadFileWhitespaceStripping(FrappeTestCase):
             with self.assertRaises(frappe.DoesNotExistError):
                 azure_blob.download_file("   ")
 
-        # Empty string is falsy in `set_cached_file_name`, so no cache
-        # write. Also assert `get_doc` never ran (miss short-circuits on
-        # DoesNotExistError before load).
         cache.set_value.assert_not_called()
         get_doc.assert_not_called()
 
 
 class TestChangeFilePrivacyRollbackInvalidatesCache(FrappeTestCase):
-    """
-    On rollback of a failed `change_file_privacy` job, the raw
-    `db.set_value` that restores `prev_url` bypasses doc events, so the
-    download_file cache must be explicitly invalidated to drop:
-    (a) any entry populated for the transient in-transit URL during the
-        outage window; and
-    (b) the restored prev_url in case a stale mapping to the transient
-        docname survived the initial invalidations.
-    """
-
     def test_rollback_invalidates_transient_and_prev_url(self):
         from frappe_azure_blob_storage.blob_controllers import blob_store as bs_mod
 
@@ -497,14 +370,12 @@ class TestChangeFilePrivacyRollbackInvalidatesCache(FrappeTestCase):
         file_doc = MagicMock()
         file_doc.custom_uploaded_to_azure = True
 
-        # Force the try-block body to raise so we drop into the except
-        # branch under test.
+        # Force the try-block body to raise so we exercise the except branch.
         blob_store_instance = MagicMock()
         blob_store_instance.get_private_container_name.return_value = "private"
         blob_store_instance.get_public_container_name.return_value = "public"
         blob_store_instance.parse_url.return_value = "old-key/report.pdf"
         blob_store_instance.get_file_link.return_value = transient_url
-        # First `.get_blob_client(...).exists()` raises to trigger except.
         blob_store_instance.blob_service_client.get_blob_client.side_effect = RuntimeError("boom")
 
         invalidate = MagicMock()
@@ -517,9 +388,6 @@ class TestChangeFilePrivacyRollbackInvalidatesCache(FrappeTestCase):
             patch.object(bs_mod.frappe.db, "commit"),
             patch.object(bs_mod, "generate_error_log"),
         ):
-            # `generate_error_log(..., throw_exc=True)` in the except
-            # branch re-raises. Swallow it here — we're asserting the
-            # cache-invalidation side effect, not the exception surface.
             try:
                 bs_mod.change_file_privacy(file_id="FILE-0001", to_private=True, prev_url=prev_url)
             except Exception:

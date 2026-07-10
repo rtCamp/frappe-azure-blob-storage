@@ -6,10 +6,6 @@ from frappe_azure_blob_storage.utils.error import generate_error_log
 
 
 def before_insert(doc, method):
-    """
-    Event handler for the 'after_insert' event of the File document.
-    This function is used to upload a file to Azure Blob Storage when a new File document is created.
-    """
     settings = frappe.get_single("Azure Storage Settings")
     if not settings.auto_upload_to_azure:
         return
@@ -22,29 +18,13 @@ def before_insert(doc, method):
 
 
 def on_update(doc, method):
-    """
-    Event handler for the 'on_update' event of the File document.
-    This function is used to update the File URL if the file is stored in Azure Blob Storage.
-    """
-    # Invalidate the download_file blob-key -> File.name cache whenever the
-    # file_url changes (rename, privacy flip, etc.). Cheap Redis DEL, and it
-    # keeps stale entries from surviving until TTL expiry.
-    #
-    # Gated on `not doc.flags.in_insert` because on insert there is no
-    # prior state to invalidate — and `get_doc_before_save()` is None
-    # anyway. Also bind the doc_before_save lookup to a local so we don't
-    # call it twice.
     if not doc.flags.in_insert and doc.has_value_changed("file_url"):
         before = doc.get_doc_before_save()
         if before:
             invalidate_from_file_url(before.file_url)
         invalidate_from_file_url(doc.file_url)
 
-    if (
-        doc.flags.in_insert  # ignore if this is a new file being inserted
-        or not doc.has_value_changed("is_private")
-        or BlobStore.is_local_file(doc.file_url)
-    ):
+    if doc.flags.in_insert or not doc.has_value_changed("is_private") or BlobStore.is_local_file(doc.file_url):
         return
 
     settings = frappe.get_single("Azure Storage Settings")
@@ -64,31 +44,14 @@ def on_update(doc, method):
         raise frappe.ValidationError(f"Cannot update file {doc.file_url}: Invalid file URL.")
 
     prev_url = doc.file_url
-    # Belt-and-braces: explicitly drop the pre-flip cache entry before we
-    # rewrite file_url via raw SQL. The block at the top of `on_update`
-    # already invalidates when `has_value_changed("file_url")` is True,
-    # but here only `is_private` may have changed — file_url is still the
-    # pre-flip URL — so we invalidate here too. The following
-    # `frappe.db.set_value` bypasses doc events, so this is our only
-    # chance to prevent a stale docname from surviving until TTL.
+    # set_value below bypasses doc events, so invalidate manually.
     invalidate_from_file_url(prev_url)
-    # Generate a placeholder URL for the file while it is being moved
     frappe.db.set_value("File", doc.name, "file_url", blob_store.get_file_link("in-transit"))
-    # Race-window shrinker (NOT closer): a concurrent `download_file`
-    # for `prev_url` may have landed between the invalidate above and
-    # the `set_value` write — it would have re-queried the DB (still
-    # pointing at prev_url at that instant), succeeded, and repopulated
-    # the stale mapping. Invalidating again here narrows that window
-    # but does not eliminate it: `frappe.db.set_value` writes inside
-    # the current transaction, and on the default REPEATABLE READ
-    # isolation the write is not visible to concurrent readers until
-    # the outer save commits — so a reader can still land AFTER this
-    # second invalidate but BEFORE the write is visible and repopulate
-    # the stale mapping one more time. The enqueued `change_file_privacy`
-    # job saves the doc again on the ORM path once the move completes,
-    # which fires `on_update` post-commit and provides the final cleanup.
-    # If a truly closed window ever becomes load-bearing, upgrade this
-    # to a post-commit hook (e.g. `frappe.db.after_commit.add(...)`).
+    # Second invalidation shrinks (does not close) the race window where a
+    # concurrent download_file repopulates the stale mapping between the
+    # first invalidate and the set_value. The enqueued change_file_privacy
+    # job re-saves the doc post-commit and fires on_update again for the
+    # final cleanup.
     invalidate_from_file_url(prev_url)
 
     frappe.enqueue(
@@ -104,32 +67,14 @@ def on_update(doc, method):
 
 
 def after_rename(doc, method, old_name, new_name, merge):
-    """
-    Event handler for the 'after_rename' event of the File document.
-
-    A rename changes `File.name` (the docname) — which is the VALUE our
-    download_file cache stores against a blob KEY. The blob key itself
-    is derived from `file_url`, which a rename does NOT change, so the
-    entry to drop is the one keyed on `doc.file_url` (the same before
-    and after the rename). Invalidating it forces the next lookup to
-    repopulate with the fresh (renamed) docname.
-
-    If a rename ever simultaneously changes `file_url` (Frappe permits
-    content-hash-based renames in some flows), the on_update handler's
-    top-level `has_value_changed("file_url")` block will run first and
-    invalidate BOTH the pre- and post-rename URLs via
-    `get_doc_before_save`, so no stale entry survives.
-    """
+    # Rename changes File.name (the cache VALUE) but not file_url (the
+    # cache KEY derivation), so drop the entry keyed on the current URL.
     invalidate_from_file_url(doc.file_url)
 
 
 def on_trash(doc, method):
-    """
-    Event handler for the 'on_trash' event of the File document.
-    This function is used to delete a file from Azure Blob Storage when it is deleted in Frappe.
-    """
-    # Always drop the download_file lookup cache for this URL — even for
-    # local files we may have populated it during a privacy transition.
+    # Drop the lookup cache even for local files — an entry may have been
+    # populated during a prior privacy transition.
     invalidate_from_file_url(doc.file_url)
 
     if BlobStore.is_local_file(doc.file_url):
