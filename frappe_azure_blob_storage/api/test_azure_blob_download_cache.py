@@ -174,11 +174,13 @@ class TestDownloadFileCacheEviction(FrappeTestCase):
         doc.attached_to_doctype = None
         doc.flags = MagicMock()
         doc.flags.in_insert = False
-        doc.has_value_changed.side_effect = lambda field: field in {"file_url", "is_private"}
-
-        before = MagicMock()
-        before.file_url = prev_url
-        doc.get_doc_before_save.return_value = before
+        # Real-world privacy flip: only `is_private` changed. `file_url`
+        # is still the pre-flip proxy URL and has_value_changed("file_url")
+        # is False — so the top-of-hook invalidator does NOT fire, and the
+        # belt-and-braces invalidate call before the raw SQL write is the
+        # only thing that drops the stale cache entry.
+        doc.has_value_changed.side_effect = lambda field: field == "is_private"
+        doc.get_doc_before_save.return_value = None
 
         invalidate = MagicMock()
 

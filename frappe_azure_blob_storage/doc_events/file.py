@@ -64,6 +64,14 @@ def on_update(doc, method):
         raise frappe.ValidationError(f"Cannot update file {doc.file_url}: Invalid file URL.")
 
     prev_url = doc.file_url
+    # Belt-and-braces: explicitly drop the pre-flip cache entry before we
+    # rewrite file_url via raw SQL. The block at the top of `on_update`
+    # already invalidates when `has_value_changed("file_url")` is True,
+    # but here only `is_private` may have changed — file_url is still the
+    # pre-flip URL — so we invalidate here too. The following
+    # `frappe.db.set_value` bypasses doc events, so this is our only
+    # chance to prevent a stale docname from surviving until TTL.
+    invalidate_from_file_url(prev_url)
     # Generate a placeholder URL for the file while it is being moved
     frappe.db.set_value("File", doc.name, "file_url", blob_store.get_file_link("in-transit"))
 
