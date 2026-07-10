@@ -171,13 +171,21 @@ def _resolve_and_cache_file_doc(file_name: str) -> "frappe.model.document.Docume
 
     Shared by both the cache-miss path and the stale-guard re-resolution
     path in `download_file` so the two branches stay in lockstep.
+
+    Cache write is deferred until AFTER `get_doc` returns successfully:
+    a get_doc failure between the `db.get_value` and the load (row
+    deleted mid-flight, child-table load error, permission surface, etc.)
+    must not leave a docname in the cache that can't actually be loaded.
+    The `download_file` DoesNotExistError branch self-heals eventually,
+    but we don't want concurrent readers piling onto a poisoned entry.
     """
     file_url = BlobStore.get_file_link(file_name)
     docname = frappe.db.get_value("File", {"file_url": file_url}, "name")
     if not docname:
         raise frappe.DoesNotExistError
+    file_doc = frappe.get_doc("File", docname)
     set_cached_file_name(file_name, docname)
-    return frappe.get_doc("File", docname)
+    return file_doc
 
 
 @frappe.whitelist(methods=["GET"], allow_guest=True)  # nosemgrep

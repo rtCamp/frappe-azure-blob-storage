@@ -88,9 +88,14 @@ def parse_blob_key_from_url(file_url: str) -> str | None:
     NOTE: `parse_qs` decodes URL-encoded values, so a `file_name` query
     param containing `%20` etc. is decoded correctly. Blob keys emitted
     by the default `BlobStore.blob_key_generator` are already scrubbed
-    to `[0-9a-zA-Z._-]` and cannot contain characters that would need
-    URL-encoding — but a custom `blob_key_generator` hook that emits
-    URL-encoded characters will round-trip cleanly through this helper.
+    to `[0-9a-zA-Z._-]` and are safe. Callers who install a custom
+    `blob_key_generator` MUST emit URL-safe keys (or URL-encode any
+    unsafe characters themselves): `get_file_link` embeds the key into
+    the `file_name` query string without additional escaping, so a
+    generator that emits a raw `&`, `?`, `=`, `#`, or `+` will produce
+    a `file_url` that `parse_qs` splits/decodes incorrectly. The
+    stale-guard in `download_file` would then always mismatch, silently
+    defeating the cache for that File.
     """
     if not file_url:
         return None

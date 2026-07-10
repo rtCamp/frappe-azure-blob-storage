@@ -74,16 +74,21 @@ def on_update(doc, method):
     invalidate_from_file_url(prev_url)
     # Generate a placeholder URL for the file while it is being moved
     frappe.db.set_value("File", doc.name, "file_url", blob_store.get_file_link("in-transit"))
-    # Race-window closer: a concurrent `download_file` for `prev_url` may
-    # have landed between the invalidate above and the `set_value` write
-    # — it would have re-queried the DB (still pointing at prev_url at
-    # that instant), succeeded, and repopulated the stale mapping.
-    # Invalidating again immediately after the raw write shrinks the
-    # window to zero: any entry populated during the race is dropped
-    # once the write commits. `change_file_privacy` on the ORM path
-    # will fire `on_update` again anyway when the real post-flip URL is
-    # saved, but we shouldn't rely on that to clean up a race window we
-    # can close cheaply here.
+    # Race-window shrinker (NOT closer): a concurrent `download_file`
+    # for `prev_url` may have landed between the invalidate above and
+    # the `set_value` write — it would have re-queried the DB (still
+    # pointing at prev_url at that instant), succeeded, and repopulated
+    # the stale mapping. Invalidating again here narrows that window
+    # but does not eliminate it: `frappe.db.set_value` writes inside
+    # the current transaction, and on the default REPEATABLE READ
+    # isolation the write is not visible to concurrent readers until
+    # the outer save commits — so a reader can still land AFTER this
+    # second invalidate but BEFORE the write is visible and repopulate
+    # the stale mapping one more time. The enqueued `change_file_privacy`
+    # job saves the doc again on the ORM path once the move completes,
+    # which fires `on_update` post-commit and provides the final cleanup.
+    # If a truly closed window ever becomes load-bearing, upgrade this
+    # to a post-commit hook (e.g. `frappe.db.after_commit.add(...)`).
     invalidate_from_file_url(prev_url)
 
     frappe.enqueue(

@@ -418,11 +418,14 @@ def change_file_privacy(
         # broadly because invalidation must never mask the original
         # failure that landed us in this except block.
         try:
-            # `blob_store` may not be bound if `BlobStore()` itself raised
-            # on entry to the try. Re-instantiate defensively — the
-            # constructor only reads Azure Storage Settings, no I/O.
-            _bs = BlobStore()
-            invalidate_from_file_url(_bs.get_file_link("in-transit"))
+            # `get_file_link` is a `@classmethod` — no instance needed,
+            # no I/O, no DB read for Azure Storage Settings. Calling it
+            # on the class also avoids re-instantiating `BlobStore` in
+            # a rollback path that may already be handling an Azure API
+            # failure (the constructor calls `_ensure_container_exists`
+            # on both containers, which issues Azure calls — the last
+            # thing we want on an error-recovery branch).
+            invalidate_from_file_url(BlobStore.get_file_link("in-transit"))
             if prev_url:
                 invalidate_from_file_url(prev_url)
         except Exception:  # noqa: BLE001
