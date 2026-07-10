@@ -142,6 +142,7 @@ doc_events = {
         "before_insert": "frappe_azure_blob_storage.doc_events.file.before_insert",
         "on_update": "frappe_azure_blob_storage.doc_events.file.on_update",
         "on_trash": "frappe_azure_blob_storage.doc_events.file.on_trash",
+        "after_rename": "frappe_azure_blob_storage.doc_events.file.after_rename",
     }
 }
 

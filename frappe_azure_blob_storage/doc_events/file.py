@@ -1,6 +1,7 @@
 import frappe
 
 from frappe_azure_blob_storage.blob_controllers.blob_store import BlobStore, change_file_privacy, upload_local_file
+from frappe_azure_blob_storage.utils.cache import invalidate_from_file_url
 from frappe_azure_blob_storage.utils.error import generate_error_log
 
 
@@ -25,6 +26,14 @@ def on_update(doc, method):
     Event handler for the 'on_update' event of the File document.
     This function is used to update the File URL if the file is stored in Azure Blob Storage.
     """
+    # Invalidate the download_file blob-key -> File.name cache whenever the
+    # file_url changes (rename, privacy flip, etc.). Cheap Redis DEL, and it
+    # keeps stale entries from surviving until TTL expiry.
+    if doc.has_value_changed("file_url"):
+        prev_url = doc.get_doc_before_save().file_url if doc.get_doc_before_save() else None
+        invalidate_from_file_url(prev_url)
+        invalidate_from_file_url(doc.file_url)
+
     if (
         doc.flags.in_insert  # ignore if this is a new file being inserted
         or not doc.has_value_changed("is_private")
@@ -64,11 +73,25 @@ def on_update(doc, method):
     )
 
 
+def after_rename(doc, method, old_name, new_name, merge):
+    """
+    Event handler for the 'after_rename' event of the File document.
+    A rename changes `File.name`, which is the value our download_file cache
+    stores against a blob key — invalidate so the next lookup repopulates
+    with the new docname.
+    """
+    invalidate_from_file_url(doc.file_url)
+
+
 def on_trash(doc, method):
     """
     Event handler for the 'on_trash' event of the File document.
     This function is used to delete a file from Azure Blob Storage when it is deleted in Frappe.
     """
+    # Always drop the download_file lookup cache for this URL — even for
+    # local files we may have populated it during a privacy transition.
+    invalidate_from_file_url(doc.file_url)
+
     if BlobStore.is_local_file(doc.file_url):
         return
 

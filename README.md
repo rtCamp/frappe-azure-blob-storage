@@ -28,6 +28,16 @@ Pre-commit is configured to use the following tools for checking and formatting 
 - prettier
 - pyupgrade
 
+### How `download_file` works
+
+Uploaded files are stored on Azure with a randomised blob key; the URL saved on the Frappe `File` doc is a proxy that points back at this app:
+
+```
+<site>/api/method/frappe_azure_blob_storage.api.azure_blob.download_file?file_name=<blob-key>
+```
+
+On each request the endpoint resolves the blob key to the underlying `File` document, runs Frappe's permission check, then redirects the client to a short-lived Azure SAS URL. Because every proxy URL shares a long common prefix, the core prefix index on `tabFile.file_url` has poor selectivity — the resolved `blob-key -> File.name` mapping is therefore cached in Redis (1 hour TTL) and invalidated automatically on File update/rename/delete.
+
 ### License
 
 agpl-3.0

@@ -2,6 +2,11 @@ import frappe
 from frappe import _
 
 from frappe_azure_blob_storage.blob_controllers.blob_store import BlobStore, upload_local_file
+from frappe_azure_blob_storage.utils.cache import (
+    get_cached_file_name,
+    invalidate_cached_file_name,
+    set_cached_file_name,
+)
 from frappe_azure_blob_storage.utils.error import generate_error_log
 from frappe_azure_blob_storage.utils.http import http_response
 
@@ -171,14 +176,32 @@ def download_file(file_name: str):
         if "?fid=" in file_name:
             file_name = file_name.split("?fid=")[0]
 
-        # 1. Get the File document
-        file_url = BlobStore.get_file_link(file_name)
-        file_doc = frappe.db.exists("File", {"file_url": file_url})
+        # 1. Resolve the File docname.
+        #
+        # High-traffic downloads make this lookup the hot path. The core
+        # `file_url_index` on `tabFile.file_url` is a prefix index on the
+        # first 100 chars, and every proxy URL we mint shares a long common
+        # prefix — so the index has near-zero selectivity and MySQL scans.
+        #
+        # We cache the resolved `File.name` per blob key in Redis; on a miss
+        # we do a single `db.get_value` (previous code did `db.exists` then
+        # `get_doc`, i.e. two round-trips) and populate the cache.
+        docname = get_cached_file_name(file_name)
+        if not docname:
+            file_url = BlobStore.get_file_link(file_name)
+            docname = frappe.db.get_value("File", {"file_url": file_url}, "name")
+            if not docname:
+                raise frappe.DoesNotExistError
+            set_cached_file_name(file_name, docname)
 
-        if not file_doc:
-            raise frappe.DoesNotExistError
-
-        file_doc = frappe.get_doc("File", file_doc)
+        try:
+            file_doc = frappe.get_doc("File", docname)
+        except frappe.DoesNotExistError:
+            # The cached docname points at a row that no longer exists (e.g.
+            # deleted between cache write and this request). Drop the stale
+            # entry and let the client retry.
+            invalidate_cached_file_name(file_name)
+            raise
 
         # 3. If file is local let frappe handle it.
         if BlobStore.is_local_file(file_doc.file_url):
