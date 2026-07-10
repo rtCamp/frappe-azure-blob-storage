@@ -176,6 +176,11 @@ def download_file(file_name: str):
         if "?fid=" in file_name:
             file_name = file_name.split("?fid=")[0]
 
+        # Normalize whitespace so a client sending a stray trailing space
+        # doesn't diverge from the DB row that MySQL collation would still
+        # match, keeping cache key stability tight.
+        file_name = file_name.strip()
+
         # 1. Resolve the File docname.
         #
         # High-traffic downloads make this lookup the hot path. The core
@@ -187,7 +192,7 @@ def download_file(file_name: str):
         # we do a single `db.get_value` (previous code did `db.exists` then
         # `get_doc`, i.e. two round-trips) and populate the cache.
         docname = get_cached_file_name(file_name)
-        if not docname:
+        if docname is None:
             file_url = BlobStore.get_file_link(file_name)
             docname = frappe.db.get_value("File", {"file_url": file_url}, "name")
             if not docname:
@@ -202,6 +207,21 @@ def download_file(file_name: str):
             # entry and let the client retry.
             invalidate_cached_file_name(file_name)
             raise
+
+        # Guard against a stale cache entry where the docname still exists
+        # but its file_url has been mutated out-of-band (data migration,
+        # bulk-rename tool that bypasses doc events, etc.). Our hooks cover
+        # the ORM paths, but Redis is a cache, not a source of truth — a
+        # cheap membership check here re-resolves via the DB rather than
+        # returning a SAS URL for the wrong blob.
+        if file_name not in (file_doc.file_url or ""):
+            invalidate_cached_file_name(file_name)
+            file_url = BlobStore.get_file_link(file_name)
+            docname = frappe.db.get_value("File", {"file_url": file_url}, "name")
+            if not docname:
+                raise frappe.DoesNotExistError
+            set_cached_file_name(file_name, docname)
+            file_doc = frappe.get_doc("File", docname)
 
         # 3. If file is local let frappe handle it.
         if BlobStore.is_local_file(file_doc.file_url):

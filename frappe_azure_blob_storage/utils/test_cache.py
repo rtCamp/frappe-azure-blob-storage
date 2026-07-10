@@ -87,3 +87,15 @@ class TestDownloadFileCache(FrappeTestCase):
             invalidate_from_file_url("/private/files/report.pdf")
             invalidate_from_file_url("")
         cache.delete_value.assert_not_called()
+
+    def test_parse_blob_key_ignores_other_api_method_paths(self):
+        """
+        The parser must not accept any `/api/method/...` URL — only our
+        own download_file endpoint. A stray whitelisted method URL that
+        somehow surfaced in File.file_url should be treated as a miss.
+        """
+        url = (
+            "https://example.com/api/method/frappe.core.doctype.file.file.some_other_method"
+            "?file_name=abcd1234/report.pdf"
+        )
+        self.assertIsNone(_parse_blob_key_from_url(url))

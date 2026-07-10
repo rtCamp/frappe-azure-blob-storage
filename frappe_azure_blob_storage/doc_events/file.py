@@ -29,9 +29,15 @@ def on_update(doc, method):
     # Invalidate the download_file blob-key -> File.name cache whenever the
     # file_url changes (rename, privacy flip, etc.). Cheap Redis DEL, and it
     # keeps stale entries from surviving until TTL expiry.
-    if doc.has_value_changed("file_url"):
-        prev_url = doc.get_doc_before_save().file_url if doc.get_doc_before_save() else None
-        invalidate_from_file_url(prev_url)
+    #
+    # Gated on `not doc.flags.in_insert` because on insert there is no
+    # prior state to invalidate — and `get_doc_before_save()` is None
+    # anyway. Also bind the doc_before_save lookup to a local so we don't
+    # call it twice.
+    if not doc.flags.in_insert and doc.has_value_changed("file_url"):
+        before = doc.get_doc_before_save()
+        if before:
+            invalidate_from_file_url(before.file_url)
         invalidate_from_file_url(doc.file_url)
 
     if (

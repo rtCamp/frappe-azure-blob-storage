@@ -70,14 +70,20 @@ def invalidate_from_file_url(file_url: str) -> None:
         invalidate_cached_file_name(blob_key)
 
 
+_DOWNLOAD_FILE_METHOD_PATH = "/api/method/frappe_azure_blob_storage.api.azure_blob.download_file"
+
+
 def _parse_blob_key_from_url(file_url: str) -> str | None:
     """
-    Extract the `file_name` query parameter from a `/api/method/...` proxy
-    URL. Returns None for local URLs or anything unparseable.
+    Extract the `file_name` query parameter from our proxy URL. Returns
+    None for local URLs, other whitelisted endpoints, or anything
+    unparseable — matching only the exact `download_file` path avoids
+    false positives if another `/api/method/...` endpoint on the same
+    site ever surfaces in a File.file_url.
     """
     if not file_url:
         return None
     parsed = urlparse(file_url)
-    if "/api/method/" not in parsed.path:
+    if _DOWNLOAD_FILE_METHOD_PATH not in parsed.path:
         return None
     return parse_qs(parsed.query).get("file_name", [None])[0]
