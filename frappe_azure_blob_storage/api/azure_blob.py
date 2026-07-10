@@ -172,8 +172,7 @@ def download_file(file_name: str):
             file_name = file_name.split("?fid=")[0]
 
         # 1. Get the File document
-        file_url = BlobStore.get_file_link(file_name)
-        file_doc = frappe.db.exists("File", {"file_url": file_url})
+        file_doc = frappe.db.exists("File", {"content_hash": file_name})
 
         if not file_doc:
             raise frappe.DoesNotExistError
