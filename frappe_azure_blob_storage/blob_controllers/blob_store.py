@@ -245,6 +245,10 @@ class BlobStore:
         final_key = "/".join(part for part in path_parts if part)
         return final_key
 
+    @staticmethod
+    def get_formatted_file_key(file_key: str) -> str:
+        return file_key[:255]
+
     def upload_blob(
         self,
         file_key: str,
@@ -537,7 +541,7 @@ def upload_local_file(
                     "file_url": blob_url,
                     "folder": folder_name,
                     "old_parent": folder_name,
-                    "content_hash": file_blob_key[:254],
+                    "custom_file_key": blob_store.get_formatted_file_key(file_blob_key),
                     "custom_uploaded_to_azure": 1,
                 },
             )
@@ -545,7 +549,7 @@ def upload_local_file(
             file_doc.file_url = blob_url
             file_doc.folder = folder_name
             file_doc.old_parent = folder_name
-            file_doc.content_hash = file_blob_key[:254]
+            file_doc.custom_file_key = blob_store.get_formatted_file_key(file_blob_key)
             file_doc.custom_uploaded_to_azure = 1
 
         if parent_doctype and frappe.get_meta(parent_doctype).get("image_field"):
