@@ -70,6 +70,7 @@
     "fieldname": "custom_file_key",
     "insert_after": "custom_uploaded_to_azure",
     "length": 255,
+    "module": "Frappe Azure Blob Storage",
     "fieldtype": "Data",
     "button_color": "",
     "precision": "",
