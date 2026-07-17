@@ -10,7 +10,7 @@ import frappe
 import magic
 
 logging.getLogger("azure").setLevel(logging.WARNING)
-from azure.core.exceptions import AzureError, ResourceExistsError
+from azure.core.exceptions import AzureError, ResourceExistsError, ResourceNotFoundError
 from azure.storage.blob import (
     BlobSasPermissions,
     BlobServiceClient,
@@ -43,13 +43,34 @@ class BlobStore:
         """
         Initializes the BlobServiceClient by fetching credentials from
         the 'Azure Storage Settings' Doctype.
+
+        Container existence is no longer verified at construction time.
+        Write paths that create or copy blobs (``upload_blob``,
+        ``change_file_privacy``) call ``_ensure_container_exists`` before
+        the write, memoized per instance, so create-rights are only
+        exercised when actually needed. Read paths (SAS URL generation,
+        ``parse_url``) and the best-effort ``delete_blob`` do not call
+        ``_ensure_container_exists`` and will not auto-create a missing
+        container — ``delete_blob`` swallows ``ResourceNotFoundError`` to
+        preserve the prior "missing container is a no-op delete"
+        behavior that used to be a side effect of the eager ensure in
+        ``__init__``.
+
+        This avoids two unconditional Azure REST round-trips on every
+        ``BlobStore()`` instantiation (one per container), which was
+        load-bearing on read-heavy workloads where most call sites never
+        touch a write path at all. On a production-scale workload, APM
+        Span data showed roughly ``avg_ext_calls ≈ 2.0`` per
+        ``BlobStore()`` instantiation against the container-create
+        endpoint, all of which become avoidable with this change.
         """
         self.settings = frappe.get_single("Azure Storage Settings")
         self.blob_service_client = blob_service_client or self._get_blob_service_client()
 
-        # Ensure appropriate containers
-        self._ensure_container_exists(self.get_public_container_name())
-        self._ensure_container_exists(self.get_private_container_name())
+        # Tracks container names whose existence has already been ensured for
+        # this instance, so ``_ensure_container_exists`` is a no-op on repeat
+        # calls within the same ``BlobStore`` lifetime.
+        self._containers_ensured: set[str] = set()
 
     def get_public_container_name(self) -> str:
         """
@@ -66,7 +87,14 @@ class BlobStore:
     def _ensure_container_exists(self, container_name: str):
         """
         Create a container if it doesn't exist.
+
+        Memoized per ``BlobStore`` instance via ``self._containers_ensured`` so
+        repeated calls for the same container do not issue additional Azure
+        REST round-trips.
         """
+        if container_name in self._containers_ensured:
+            return
+
         try:
             container_client = self.blob_service_client.get_container_client(container_name)
 
@@ -75,6 +103,8 @@ class BlobStore:
             except ResourceExistsError:
                 # This is expected if the container is already there.
                 pass
+
+            self._containers_ensured.add(container_name)
 
         except Exception as e:
             generate_error_log(
@@ -215,6 +245,10 @@ class BlobStore:
         final_key = "/".join(part for part in path_parts if part)
         return final_key
 
+    @staticmethod
+    def get_formatted_file_key(file_key: str) -> str:
+        return file_key[:255]
+
     def upload_blob(
         self,
         file_key: str,
@@ -229,10 +263,15 @@ class BlobStore:
             if not self.settings.auto_upload_to_azure:
                 return file_path
 
+            target_container = (
+                self.get_public_container_name() if not is_file_private else self.get_private_container_name()
+            )
+            # Lazy container ensure: deferred from ``__init__`` so it only runs
+            # on write paths, and only once per container per instance.
+            self._ensure_container_exists(target_container)
+
             blob_client = self.blob_service_client.get_blob_client(
-                container=(
-                    self.get_public_container_name() if not is_file_private else self.get_private_container_name()
-                ),
+                container=target_container,
                 blob=file_key,
             )
 
@@ -264,6 +303,19 @@ class BlobStore:
         """
         Deletes a specific blob from a given container in Azure.
 
+        Best-effort delete: a missing blob is already a no-op on the
+        Azure SDK side, and a missing container is treated as a no-op
+        here (swallowed ``ResourceNotFoundError``). This matches the
+        behavior that previously came "for free" from the eager
+        container-ensure in ``__init__``: if a container had been
+        deleted out-of-band, the next ``BlobStore()`` would recreate
+        it and the subsequent ``delete_blob()`` would then succeed as
+        a no-op against an empty container. With the lazy-ensure
+        change, ``delete_blob`` no longer goes through
+        ``_ensure_container_exists`` (we don't want a deletion path to
+        also create-rights), so we explicitly absorb the
+        container-missing case here instead.
+
         :param container_name: The name of the container holding the blob.
         :param blob_name: The name of the blob to delete.
         """
@@ -271,6 +323,10 @@ class BlobStore:
             blob_client = self.blob_service_client.get_blob_client(container=container_name, blob=blob_name)
             # delete_blob() will not raise an error if the blob doesn't exist.
             blob_client.delete_blob()
+        except ResourceNotFoundError:
+            # Container itself is missing — treat as best-effort no-op,
+            # consistent with prior eager-ensure-recreate behavior.
+            return
         except Exception as e:
             generate_error_log(
                 "Azure Blob Deletion Error",
@@ -367,6 +423,11 @@ def change_file_privacy(
                 frappe.DoesNotExistError,
             )
             return
+
+        # Ensure the destination container exists before the server-side copy.
+        # Lazy ensure: the source container does not need this because the
+        # existence of ``source_client`` (verified above) already proves it.
+        blob_store._ensure_container_exists(dest_container)
 
         destination_client = blob_store.blob_service_client.get_blob_client(
             container=dest_container, blob=destination_blob_key
@@ -480,7 +541,7 @@ def upload_local_file(
                     "file_url": blob_url,
                     "folder": folder_name,
                     "old_parent": folder_name,
-                    "content_hash": file_blob_key[:254],
+                    "custom_file_key": blob_store.get_formatted_file_key(file_blob_key),
                     "custom_uploaded_to_azure": 1,
                 },
             )
@@ -488,7 +549,7 @@ def upload_local_file(
             file_doc.file_url = blob_url
             file_doc.folder = folder_name
             file_doc.old_parent = folder_name
-            file_doc.content_hash = file_blob_key[:254]
+            file_doc.custom_file_key = blob_store.get_formatted_file_key(file_blob_key)
             file_doc.custom_uploaded_to_azure = 1
 
         if parent_doctype and frappe.get_meta(parent_doctype).get("image_field"):
